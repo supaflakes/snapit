@@ -12,30 +12,29 @@ const {
   clipboard,
   ClipboardItem,
   nativeImage,
+  nativeTheme,
   dialog,
+  shell,
 } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+const I18N = require('./i18n');
+const { SettingsStore, DEFAULT_SHORTCUTS } = require('./settings');
+const { Hotkeys } = require('./hotkeys');
 
 const ASSETS = path.join(__dirname, '..', 'assets');
 const PRELOAD = path.join(__dirname, 'preload.js');
-const CAPTURE_DELAY_MS = 3000;
 
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp' };
-
-// Raccourcis globaux : [accélérateur, mode, libellé affiché]
-const SHORTCUTS = [
-  ['PrintScreen', 'region', 'Impr. écran'],
-  ['Shift+PrintScreen', 'fullscreen', 'Maj+Impr. écran'],
-  ['Alt+Shift+S', 'region', 'Alt+Maj+S'],
-];
 
 let tray = null;
 let quitting = false;
 let balloonShown = false;
 let capturing = false;
 let session = null; // sélection de zone en cours
-let registeredShortcuts = [];
+let settingsWindow = null;
+let settings = null;
+let hotkeys = null;
 
 const editors = new Map(); // webContents.id -> { win, hasImage }
 const pendingImages = new Map(); // webContents.id -> image à charger au démarrage de l'éditeur
@@ -49,6 +48,38 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => showEditor());
+}
+
+// ---------------------------------------------------------------------------
+// Langue, thème
+// ---------------------------------------------------------------------------
+
+const lang = () => I18N.resolve(settings.get().language, app.getLocale());
+const t = (key, params) => I18N.t(lang(), key, params);
+const shortcutLabel = (action) => I18N.formatAccelerator(lang(), settings.get().shortcuts[action]);
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#141418' : '#f4f4f7');
+
+function applyTheme() {
+  nativeTheme.themeSource = settings.get().theme;
+}
+
+// État partagé avec les pages (éditeur, paramètres)
+function appState() {
+  return {
+    settings: settings.get(),
+    lang: lang(),
+    status: hotkeys?.getStatus() ?? { shortcuts: {}, hookAvailable: false, hookFailed: false },
+    version: app.getVersion(),
+    isPackaged: app.isPackaged,
+    openAtLogin: app.isPackaged ? app.getLoginItemSettings().openAtLogin : false,
+  };
+}
+
+function broadcast() {
+  const state = appState();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('app:state', state);
+  }
 }
 
 const secureWebPreferences = {
@@ -74,19 +105,19 @@ function lockDownNavigation(win) {
 
 function createEditor(payload) {
   const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  const width = Math.min(1400, Math.round(area.width * 0.85));
-  const height = Math.min(920, Math.round(area.height * 0.85));
+  const width = Math.min(1480, Math.round(area.width * 0.85));
+  const height = Math.min(940, Math.round(area.height * 0.85));
   const win = new BrowserWindow({
     width,
     height,
     x: Math.round(area.x + (area.width - width) / 2),
     y: Math.round(area.y + (area.height - height) / 2),
-    minWidth: 760,
-    minHeight: 480,
+    minWidth: 820,
+    minHeight: 520,
     show: false,
     title: 'Snapit',
     icon: path.join(ASSETS, 'icon.png'),
-    backgroundColor: '#141418',
+    backgroundColor: windowBackground(),
     autoHideMenuBar: true,
     webPreferences: secureWebPreferences,
   });
@@ -105,12 +136,12 @@ function createEditor(payload) {
   win.webContents.on('will-prevent-unload', (e) => {
     const choice = dialog.showMessageBoxSync(win, {
       type: 'question',
-      buttons: ['Fermer sans enregistrer', 'Annuler'],
+      buttons: [t('unsaved.close'), t('unsaved.cancel')],
       defaultId: 1,
       cancelId: 1,
       title: 'Snapit',
-      message: 'Cette capture contient des modifications non enregistrées.',
-      detail: 'Voulez-vous vraiment fermer la fenêtre ?',
+      message: t('unsaved.message'),
+      detail: t('unsaved.detail'),
     });
     if (choice === 0) e.preventDefault();
   });
@@ -122,8 +153,8 @@ function createEditor(payload) {
       balloonShown = true;
       tray.displayBalloon({
         iconType: 'info',
-        title: 'Snapit reste actif',
-        content: `Appuyez sur ${primaryShortcutLabel()} pour capturer. Clic droit sur l'icône pour plus d'options.`,
+        title: t('balloon.title'),
+        content: t('balloon.body', { key: shortcutLabel('region') || t('balloon.noKey') }),
       });
     }
   });
@@ -162,7 +193,7 @@ function openImageInEditor(payload) {
 
 async function readImageFile(filePath) {
   const mime = IMAGE_TYPES[path.extname(filePath).toLowerCase()];
-  if (!mime) throw new Error('Format de fichier non pris en charge.');
+  if (!mime) throw new Error(t('error.format'));
   const data = await fs.readFile(filePath);
   return {
     dataUrl: `data:${mime};base64,${data.toString('base64')}`,
@@ -173,13 +204,53 @@ async function readImageFile(filePath) {
 
 async function openImageFromDialog(parent) {
   const { canceled, filePaths } = await dialog.showOpenDialog(parent ?? undefined, {
-    title: 'Ouvrir une image',
+    title: t('dialog.open'),
     defaultPath: app.getPath('pictures'),
     properties: ['openFile'],
-    filters: [{ name: 'Images', extensions: Object.keys(IMAGE_TYPES).map((e) => e.slice(1)) }],
+    filters: [{ name: t('filter.images'), extensions: Object.keys(IMAGE_TYPES).map((e) => e.slice(1)) }],
   });
   if (canceled || !filePaths.length) return null;
   return readImageFile(filePaths[0]);
+}
+
+// ---------------------------------------------------------------------------
+// Paramètres
+// ---------------------------------------------------------------------------
+
+function openSettings() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    focusWindow(settingsWindow);
+    return;
+  }
+  settingsWindow = new BrowserWindow({
+    width: 720,
+    height: 760,
+    minWidth: 560,
+    minHeight: 480,
+    show: false,
+    title: t('settings.title'),
+    icon: path.join(ASSETS, 'icon.png'),
+    backgroundColor: windowBackground(),
+    autoHideMenuBar: true,
+    webPreferences: secureWebPreferences,
+  });
+  lockDownNavigation(settingsWindow);
+  settingsWindow.once('ready-to-show', () => settingsWindow.show());
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+    hotkeys?.stopRecording();
+  });
+  settingsWindow.loadFile(path.join(__dirname, 'settings', 'index.html'));
+}
+
+function onSettingsChanged(next, previous) {
+  if (next.theme !== previous.theme) applyTheme();
+  if (JSON.stringify(next.shortcuts) !== JSON.stringify(previous.shortcuts) || next.overrideSnippingTool !== previous.overrideSnippingTool) {
+    hotkeys.apply(next.shortcuts, next.overrideSnippingTool);
+  }
+  if (next.language !== previous.language) destroyOverlays();
+  refreshTray();
+  broadcast();
 }
 
 // ---------------------------------------------------------------------------
@@ -213,31 +284,31 @@ async function grabDisplays() {
     .filter(Boolean);
 }
 
-function hideEditorsForCapture() {
-  const hidden = liveEditors()
-    .map((e) => e.win)
-    .filter((w) => w.isVisible() && !w.isMinimized());
-  hidden.forEach((w) => w.hide());
-  return hidden;
+function hideWindowsForCapture() {
+  const windows = [...liveEditors().map((e) => e.win), settingsWindow].filter(
+    (w) => w && !w.isDestroyed() && w.isVisible() && !w.isMinimized(),
+  );
+  windows.forEach((w) => w.hide());
+  return windows;
 }
 
-function restoreEditors(hidden) {
+function restoreWindows(hidden) {
   hidden.filter((w) => !w.isDestroyed()).forEach((w) => w.showInactive());
 }
 
 async function startCapture(mode = 'region') {
   if (capturing) return;
   capturing = true;
-  const hidden = hideEditorsForCapture();
+  const hidden = hideWindowsForCapture();
   try {
     if (mode === 'delay') {
-      await delay(CAPTURE_DELAY_MS);
+      await delay(settings.get().captureDelay * 1000);
       mode = 'region';
     }
     // Laisse le temps à Windows de retirer nos fenêtres (et le menu de la zone de notification) de l'écran.
     await delay(hidden.length ? 250 : 180);
     const captures = await grabDisplays();
-    if (!captures.length) throw new Error("Aucun écran n'a pu être capturé.");
+    if (!captures.length) throw new Error(t('error.noScreen'));
 
     let result;
     if (mode === 'fullscreen') {
@@ -248,17 +319,19 @@ async function startCapture(mode = 'region') {
       result = await selectRegion(captures);
     }
 
-    restoreEditors(hidden);
+    restoreWindows(hidden);
     if (result) {
+      const png = result.image.toPNG();
+      if (settings.get().copyAfterCapture) await writeClipboardPng(png);
       openImageInEditor({
-        dataUrl: result.image.toDataURL(),
+        dataUrl: `data:image/png;base64,${png.toString('base64')}`,
         scaleFactor: result.scaleFactor,
         name: captureName(),
       });
     }
   } catch (err) {
-    restoreEditors(hidden);
-    dialog.showErrorBox('Capture impossible', String(err?.message ?? err));
+    restoreWindows(hidden);
+    dialog.showErrorBox(t('error.capture'), String(err?.message ?? err));
   } finally {
     capturing = false;
   }
@@ -267,7 +340,14 @@ async function startCapture(mode = 'region') {
 function captureName() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
-  return `Capture ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} à ${p(d.getHours())}.${p(d.getMinutes())}.${p(d.getSeconds())}`;
+  return t('capture.name', {
+    date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+    time: `${p(d.getHours())}.${p(d.getMinutes())}.${p(d.getSeconds())}`,
+  });
+}
+
+async function writeClipboardPng(png) {
+  await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +399,7 @@ function selectRegion(captures) {
   return new Promise((resolve) => {
     session = { captures, resolve };
     globalShortcut.register('Escape', () => endSession(null));
+    const hint = t('overlay.hint');
 
     const shown = captures.map(async (c) => {
       const overlay = getOverlay(c.display);
@@ -328,6 +409,7 @@ function selectRegion(captures) {
       // JPEG : bien plus rapide à encoder que PNG, et suffisant pour l'aperçu figé.
       wc.send('overlay:show', {
         dataUrl: `data:image/jpeg;base64,${c.image.toJPEG(92).toString('base64')}`,
+        hint,
       });
       await Promise.race([ack, delay(1500)]);
       overlayAcks.delete(wc.id);
@@ -383,7 +465,7 @@ ipcMain.on('overlay:select', (e, frac) => {
 });
 
 // ---------------------------------------------------------------------------
-// IPC éditeur
+// IPC
 // ---------------------------------------------------------------------------
 
 ipcMain.handle('capture', (_e, mode) => startCapture(mode));
@@ -403,14 +485,10 @@ ipcMain.handle('editor:open-new', (_e, payload) => {
   openImageInEditor(payload);
 });
 
-ipcMain.handle('app:info', () => ({
-  version: app.getVersion(),
-  shortcuts: registeredShortcuts.map(([, mode, label]) => ({ mode, label })),
-}));
+ipcMain.handle('app:state', () => appState());
 
 ipcMain.handle('clipboard:write-image', async (_e, dataUrl) => {
-  const png = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
-  await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+  await writeClipboardPng(Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'));
   return true;
 });
 
@@ -429,100 +507,123 @@ let lastSaveDir = null;
 
 ipcMain.handle('file:save-image', async (e, dataUrl, suggestedName) => {
   const win = BrowserWindow.fromWebContents(e.sender);
+  const { saveFolder, saveFormat } = settings.get();
   const safeName = String(suggestedName || 'Capture').replace(/[\\/:*?"<>|]/g, '-');
+  const png = { name: t('filter.png'), extensions: ['png'] };
+  const jpeg = { name: t('filter.jpeg'), extensions: ['jpg', 'jpeg'] };
+  const dir = lastSaveDir ?? (saveFolder || app.getPath('pictures'));
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: "Enregistrer l'image",
-    defaultPath: path.join(lastSaveDir ?? app.getPath('pictures'), `${safeName}.png`),
-    filters: [
-      { name: 'Image PNG', extensions: ['png'] },
-      { name: 'Image JPEG', extensions: ['jpg', 'jpeg'] },
-    ],
+    title: t('dialog.save'),
+    defaultPath: path.join(dir, `${safeName}.${saveFormat === 'jpeg' ? 'jpg' : 'png'}`),
+    filters: saveFormat === 'jpeg' ? [jpeg, png] : [png, jpeg],
   });
   if (canceled || !filePath) return null;
 
   const ext = path.extname(filePath).toLowerCase();
-  const png = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
-  const data = ext === '.jpg' || ext === '.jpeg' ? nativeImage.createFromBuffer(png).toJPEG(92) : png;
-  await fs.writeFile(filePath, data);
+  const data = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
+  await fs.writeFile(filePath, ext === '.jpg' || ext === '.jpeg' ? nativeImage.createFromBuffer(data).toJPEG(92) : data);
   lastSaveDir = path.dirname(filePath);
   return filePath;
 });
 
 ipcMain.handle('file:open-image', (e) => openImageFromDialog(BrowserWindow.fromWebContents(e.sender)));
 
-// ---------------------------------------------------------------------------
-// Zone de notification & raccourcis
-// ---------------------------------------------------------------------------
+ipcMain.handle('settings:open', () => openSettings());
 
-function registerShortcuts() {
-  registeredShortcuts = SHORTCUTS.filter(([accelerator, mode]) => {
-    try {
-      return globalShortcut.register(accelerator, () => startCapture(mode));
-    } catch {
-      return false;
-    }
+ipcMain.handle('settings:set', (_e, patch) => {
+  settings.set(patch);
+  return appState();
+});
+
+ipcMain.handle('settings:set-login', (_e, enabled) => {
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: ['--hidden'] });
+  broadcast();
+  return appState();
+});
+
+ipcMain.handle('settings:choose-folder', async (e) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender), {
+    title: t('dialog.folder'),
+    defaultPath: settings.get().saveFolder || app.getPath('pictures'),
+    properties: ['openDirectory', 'createDirectory'],
   });
-}
+  if (canceled || !filePaths.length) return appState();
+  settings.set({ saveFolder: filePaths[0] });
+  return appState();
+});
 
-function primaryShortcutLabel() {
-  return registeredShortcuts.find(([, mode]) => mode === 'region')?.[2] ?? 'le menu de Snapit';
-}
+ipcMain.handle('settings:reset-shortcuts', () => {
+  settings.set({ shortcuts: { ...DEFAULT_SHORTCUTS } });
+  return appState();
+});
 
-function shortcutFor(mode) {
-  return registeredShortcuts.find(([, m]) => m === mode)?.[0];
-}
+ipcMain.handle('settings:open-windows-keyboard', () => shell.openExternal('ms-settings:easeofaccess-keyboard'));
+
+ipcMain.on('shortcuts:record-start', () => hotkeys.startRecording());
+ipcMain.on('shortcuts:record-stop', () => hotkeys.stopRecording());
+
+// ---------------------------------------------------------------------------
+// Zone de notification
+// ---------------------------------------------------------------------------
 
 function buildTrayMenu() {
+  const accel = (action) => settings.get().shortcuts[action] || undefined;
   const template = [
-    { label: 'Capturer une zone', accelerator: shortcutFor('region'), registerAccelerator: false, click: () => startCapture('region') },
-    { label: "Capturer l'écran entier", accelerator: shortcutFor('fullscreen'), registerAccelerator: false, click: () => startCapture('fullscreen') },
-    { label: 'Capture différée (3 s)', click: () => startCapture('delay') },
+    { label: t('tray.region'), accelerator: accel('region'), registerAccelerator: false, click: () => startCapture('region') },
+    { label: t('tray.fullscreen'), accelerator: accel('fullscreen'), registerAccelerator: false, click: () => startCapture('fullscreen') },
+    { label: t('tray.delay', { s: settings.get().captureDelay }), accelerator: accel('delay'), registerAccelerator: false, click: () => startCapture('delay') },
     { type: 'separator' },
-    { label: "Ouvrir l'éditeur", click: showEditor },
+    { label: t('tray.editor'), click: showEditor },
     {
-      label: 'Ouvrir une image…',
+      label: t('tray.open'),
       click: async () => {
         try {
           const payload = await openImageFromDialog();
           if (payload) openImageInEditor(payload);
         } catch (err) {
-          dialog.showErrorBox('Ouverture impossible', String(err?.message ?? err));
+          dialog.showErrorBox(t('error.open'), String(err?.message ?? err));
         }
       },
     },
     { type: 'separator' },
+    { label: t('tray.settings'), click: openSettings },
+    { label: t('tray.quit'), click: () => { quitting = true; app.quit(); } },
   ];
-  if (app.isPackaged) {
-    template.push({
-      label: 'Lancer au démarrage de Windows',
-      type: 'checkbox',
-      checked: app.getLoginItemSettings().openAtLogin,
-      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
-    });
-    template.push({ type: 'separator' });
-  }
-  template.push({
-    label: 'Quitter Snapit',
-    click: () => {
-      quitting = true;
-      app.quit();
-    },
-  });
   return Menu.buildFromTemplate(template);
+}
+
+function refreshTray() {
+  if (!tray) return;
+  tray.setToolTip(t('tray.tooltip'));
+  tray.setContextMenu(buildTrayMenu());
 }
 
 function createTray() {
   tray = new Tray(path.join(ASSETS, 'tray.png'));
-  tray.setToolTip('Snapit — capture d’écran');
-  tray.setContextMenu(buildTrayMenu());
+  refreshTray();
   tray.on('click', showEditor);
 }
 
 app.whenReady().then(() => {
   app.setAppUserModelId('com.snapit.app');
   Menu.setApplicationMenu(null);
-  registerShortcuts();
+
+  settings = new SettingsStore(path.join(app.getPath('userData'), 'settings.json'));
+  settings.on('change', onSettingsChanged);
+  applyTheme();
+
+  hotkeys = new Hotkeys({
+    helperDir: path.join(app.getPath('userData'), 'bin'),
+    onTrigger: (action) => startCapture(action),
+    onRecord: (accelerator) => settingsWindow?.webContents.send('shortcuts:recorded', accelerator),
+    onStatus: () => broadcast(),
+  });
+  const { shortcuts, overrideSnippingTool } = settings.get();
+  hotkeys.apply(shortcuts, overrideSnippingTool);
+  hotkeys.init(); // compile/démarre l'assistant clavier en arrière-plan, puis réapplique les raccourcis
+
   createTray();
+  nativeTheme.on('updated', broadcast);
 
   for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) {
     screen.on(event, destroyOverlays);
@@ -539,7 +640,8 @@ app.on('before-quit', () => {
 });
 
 app.on('will-quit', () => {
+  hotkeys?.dispose();
   globalShortcut.unregisterAll();
 });
 
-module.exports = { startCapture, openImageInEditor };
+module.exports = { startCapture, openImageInEditor, openSettings, getSettings: () => settings, getHotkeys: () => hotkeys };

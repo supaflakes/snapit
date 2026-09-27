@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paramètres — Snapit</title>
+  <link rel="stylesheet" href="../theme.css">
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <main class="settings">
+    <header class="page-head">
+      <img src="../../assets/icon.png" alt="" width="36" height="36">
+      <h1 data-i18n="settings.title">Paramètres</h1>
+    </header>
+
+    <section class="card" aria-labelledby="h-general">
+      <h2 id="h-general" data-i18n="settings.general">Général</h2>
+
+      <div class="row">
+        <label class="row-label" for="language" data-i18n="settings.language">Langue</label>
+        <select id="language"></select>
+      </div>
+
+      <div class="row">
+        <span class="row-label" id="theme-label" data-i18n="settings.theme">Thème</span>
+        <div class="seg" id="theme" role="radiogroup" aria-labelledby="theme-label">
+          <button role="radio" data-value="system" data-i18n="settings.themeSystem">Système</button>
+          <button role="radio" data-value="dark" data-i18n="settings.themeDark">Sombre</button>
+          <button role="radio" data-value="light" data-i18n="settings.themeLight">Clair</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="row-text">
+          <span class="row-label" id="startup-label" data-i18n="settings.startup">Lancer Snapit au démarrage de Windows</span>
+          <span class="row-help" id="startup-note" data-i18n="settings.startupDev" hidden></span>
+        </div>
+        <button class="switch" id="startup" role="switch" aria-checked="false" aria-labelledby="startup-label"></button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-shortcuts">
+      <h2 id="h-shortcuts" data-i18n="settings.shortcuts">Raccourcis de capture</h2>
+      <p class="card-help" data-i18n="settings.shortcutHelp"></p>
+
+      <div class="shortcut-row" data-action="region">
+        <span class="row-label" data-i18n="settings.shortcutRegion">Capturer une zone</span>
+        <span class="status"></span>
+        <button class="shortcut"></button>
+        <button class="icon-btn clear" data-i18n-title="settings.shortcutClear" data-i18n-label="settings.shortcutClear">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="shortcut-row" data-action="fullscreen">
+        <span class="row-label" data-i18n="settings.shortcutFullscreen">Capturer l’écran entier</span>
+        <span class="status"></span>
+        <button class="shortcut"></button>
+        <button class="icon-btn clear" data-i18n-title="settings.shortcutClear" data-i18n-label="settings.shortcutClear">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="shortcut-row" data-action="delay">
+        <span class="row-label" data-i18n="settings.shortcutDelay">Capture différée</span>
+        <span class="status"></span>
+        <button class="shortcut"></button>
+        <button class="icon-btn clear" data-i18n-title="settings.shortcutClear" data-i18n-label="settings.shortcutClear">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+
+      <p class="error" id="shortcut-error" role="alert" hidden></p>
+      <button class="link-btn" id="reset-shortcuts" data-i18n="settings.shortcutReset">Rétablir les raccourcis par défaut</button>
+
+      <div class="row separated">
+        <div class="row-text">
+          <span class="row-label" id="override-label" data-i18n="settings.override"></span>
+          <span class="row-help" data-i18n="settings.overrideHelp"></span>
+          <span class="row-warning" id="override-unavailable" hidden>
+            <span data-i18n="settings.overrideUnavailable"></span>
+            <button class="link-btn" id="open-windows-settings" data-i18n="settings.openWindowsSettings"></button>
+          </span>
+        </div>
+        <button class="switch" id="override" role="switch" aria-checked="true" aria-labelledby="override-label"></button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-capture">
+      <h2 id="h-capture" data-i18n="settings.capture">Capture</h2>
+      <div class="row">
+        <label class="row-label" for="delay" data-i18n="settings.delay">Délai de la capture différée</label>
+        <div class="with-unit">
+          <input type="number" id="delay" min="1" max="60" step="1">
+          <span data-i18n="settings.seconds">secondes</span>
+        </div>
+      </div>
+      <div class="row">
+        <span class="row-label" id="copy-label" data-i18n="settings.copyAfter"></span>
+        <button class="switch" id="copy-after" role="switch" aria-checked="false" aria-labelledby="copy-label"></button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-saving">
+      <h2 id="h-saving" data-i18n="settings.saving">Enregistrement</h2>
+      <div class="row">
+        <div class="row-text">
+          <span class="row-label" data-i18n="settings.folder">Dossier par défaut</span>
+          <span class="row-help path" id="folder-path"></span>
+        </div>
+        <button class="btn" id="choose-folder" data-i18n="settings.choose">Choisir…</button>
+      </div>
+      <div class="row">
+        <span class="row-label" id="format-label" data-i18n="settings.format">Format par défaut</span>
+        <div class="seg" id="format" role="radiogroup" aria-labelledby="format-label">
+          <button role="radio" data-value="png">PNG</button>
+          <button role="radio" data-value="jpeg">JPEG</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="about" id="about"></footer>
+  </main>
+
+  <script src="../i18n.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

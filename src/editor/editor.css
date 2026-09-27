@@ -1,19 +1,3 @@
-:root {
-  --bg: #141418;
-  --stage: #0e0e11;
-  --panel: #1b1b21;
-  --panel-2: #23232b;
-  --border: #2c2c35;
-  --text: #ececf1;
-  --muted: #9a9aa8;
-  --accent: #7c5cff;
-  --accent-strong: #8f72ff;
-  --accent-soft: rgba(124, 92, 255, 0.18);
-  --radius: 8px;
-  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  color-scheme: dark;
-}
-
 * {
   box-sizing: border-box;
 }
@@ -177,8 +161,8 @@ body:not(.has-image) .needs-image {
   transform: translateX(-50%);
   padding: 5px 8px;
   border-radius: 6px;
-  background: #000;
-  color: #fff;
+  background: var(--tip-bg);
+  color: var(--tip-fg);
   font-size: 12px;
   font-weight: 400;
   white-space: nowrap;
@@ -214,7 +198,7 @@ body:not(.has-image) .needs-image {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow);
   z-index: 60;
 }
 
@@ -398,7 +382,7 @@ body:not(.has-image) .panel {
 .seg button:hover,
 .toggle:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
 }
 
 .seg button[aria-pressed="true"],
@@ -479,7 +463,7 @@ body:not(.has-image) .panel {
 }
 
 .chip:hover {
-  border-color: #3a3a46;
+  border-color: var(--border-strong);
 }
 
 .chip-dot {
@@ -488,7 +472,7 @@ body:not(.has-image) .panel {
   height: 18px;
   border-radius: 50%;
   background: var(--c);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 0 0 1px var(--ring);
 }
 
 .swatch-none {
@@ -498,7 +482,7 @@ body:not(.has-image) .panel {
   height: 18px;
   border-radius: 50%;
   background: linear-gradient(135deg, transparent 45%, #e5484d 45%, #e5484d 55%, transparent 55%), var(--panel);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 0 0 1px var(--ring);
 }
 
 .prop .swatches {
@@ -520,7 +504,7 @@ body:not(.has-image) .panel {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow);
 }
 
 .popover[hidden] {
@@ -561,7 +545,7 @@ body:not(.has-image) .panel {
 
 .none-btn:hover,
 .custom-btn:hover {
-  background: #2d2d37;
+  background: var(--hover-strong);
 }
 
 .none-btn[hidden] {
@@ -595,7 +579,7 @@ body:not(.has-image) .panel {
   border: 0;
   border-radius: 50%;
   background: var(--c);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px var(--ring);
   cursor: pointer;
   transition: transform 0.1s;
 }
@@ -605,7 +589,7 @@ body:not(.has-image) .panel {
 }
 
 .swatch[aria-checked="true"] {
-  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--c), inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--c), inset 0 0 0 1px var(--ring);
 }
 
 .custom-color {
@@ -640,7 +624,7 @@ body:not(.has-image) .panel {
   overflow: auto;
   padding: 28px;
   background-color: var(--stage);
-  background-image: radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-image: radial-gradient(var(--dots) 1px, transparent 1px);
   background-size: 18px 18px;
   outline: none;
 }
@@ -649,7 +633,7 @@ body:not(.has-image) .panel {
   position: relative;
   margin: auto;
   line-height: 0;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 18px 50px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--frame);
 }
 
 body:not(.has-image) #canvas-wrap {
@@ -728,7 +712,7 @@ body.has-image #empty {
 }
 
 .btn.big:hover {
-  background: #2d2d37;
+  background: var(--hover-strong);
 }
 
 .btn.big.primary {
@@ -841,8 +825,8 @@ body.has-image #empty {
   max-width: min(640px, calc(100vw - 32px));
   padding: 9px 14px;
   border-radius: 10px;
-  background: #f4f4f7;
-  color: #111;
+  background: var(--toast-bg);
+  color: var(--toast-fg);
   font-weight: 500;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -872,4 +856,165 @@ body.has-image #empty {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ---------------------------------------------------------- poignées de rognage */
+
+.crop-handle {
+  position: absolute;
+  z-index: 2;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+  transition: transform 0.1s;
+}
+
+.crop-handle:hover {
+  transform: scale(1.3);
+}
+
+.crop-handle[data-edge="n"],
+.crop-handle[data-edge="s"] {
+  cursor: ns-resize;
+}
+
+.crop-handle[data-edge="e"],
+.crop-handle[data-edge="w"] {
+  cursor: ew-resize;
+}
+
+.crop-handle[data-edge="nw"],
+.crop-handle[data-edge="se"] {
+  cursor: nwse-resize;
+}
+
+.crop-handle[data-edge="ne"],
+.crop-handle[data-edge="sw"] {
+  cursor: nesw-resize;
+}
+
+body.editing-text .crop-handle {
+  display: none;
+}
+
+/* ------------------------------------------------------------- préréglages */
+
+.presets {
+  padding: 16px 16px 0;
+}
+
+.presets[hidden] {
+  display: none;
+}
+
+.presets-head {
+  margin-bottom: 8px;
+}
+
+.preset-list {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.preset {
+  position: relative;
+  height: 44px;
+}
+
+.preset-apply {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.preset-apply canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.preset-apply:hover {
+  border-color: var(--border-strong);
+}
+
+.preset-apply:focus-visible,
+.preset-delete:focus-visible,
+.preset-add:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
+.preset-apply[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.preset-delete {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.preset-delete .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.preset-delete:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.preset:hover .preset-delete,
+.preset:focus-within .preset-delete {
+  display: grid;
+}
+
+.preset-add {
+  display: grid;
+  place-items: center;
+  height: 44px;
+  padding: 0;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.preset-add:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+/* infobulle alignée à droite pour les boutons en bord de fenêtre */
+.tip-left[data-tip]:hover::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }

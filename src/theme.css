@@ -1,0 +1,58 @@
+/* Couleurs de l'interface, partagées par l'éditeur et les paramètres.
+   Le thème suit prefers-color-scheme, piloté par le paramètre « Thème » (nativeTheme). */
+:root {
+  --bg: #141418;
+  --stage: #0e0e11;
+  --panel: #1b1b21;
+  --panel-2: #23232b;
+  --hover: rgba(255, 255, 255, 0.06);
+  --hover-strong: #2d2d37;
+  --border: #2c2c35;
+  --border-strong: #3a3a46;
+  --text: #ececf1;
+  --muted: #9a9aa8;
+  --accent: #7c5cff;
+  --accent-strong: #8f72ff;
+  --accent-soft: rgba(124, 92, 255, 0.18);
+  --danger: #e5484d;
+  --success: #30a46c;
+  --warning: #f5a524;
+  --ring: rgba(255, 255, 255, 0.18);
+  --dots: rgba(255, 255, 255, 0.045);
+  --frame: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 18px 50px rgba(0, 0, 0, 0.55);
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --tip-bg: #000;
+  --tip-fg: #fff;
+  --toast-bg: #f4f4f7;
+  --toast-fg: #111;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --radius: 8px;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f4f7;
+    --stage: #e6e6ec;
+    --panel: #ffffff;
+    --panel-2: #f0f0f4;
+    --hover: rgba(20, 20, 40, 0.06);
+    --hover-strong: #e4e4eb;
+    --border: #dcdce3;
+    --border-strong: #c4c4cf;
+    --text: #1b1b21;
+    --muted: #666675;
+    --accent: #6a4cf0;
+    --accent-strong: #5b3fe0;
+    --accent-soft: rgba(106, 76, 240, 0.12);
+    --ring: rgba(0, 0, 0, 0.18);
+    --dots: rgba(20, 20, 40, 0.08);
+    --frame: 0 0 0 1px rgba(20, 20, 40, 0.08), 0 14px 40px rgba(20, 20, 40, 0.18);
+    --shadow: 0 16px 40px rgba(20, 20, 40, 0.18);
+    --tip-bg: #1b1b21;
+    --tip-fg: #fff;
+    --toast-bg: #1b1b21;
+    --toast-fg: #fff;
+    color-scheme: light;
+  }
+}

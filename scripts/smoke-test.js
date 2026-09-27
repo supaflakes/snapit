@@ -5,6 +5,7 @@
 'use strict';
 
 const { app, BrowserWindow, clipboard, screen } = require('electron');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -41,6 +42,17 @@ async function drag(win, from, to, steps = 12) {
   await wait(80);
 }
 
+// Simule un vrai appui sur Impr. écran, au niveau du système (comme le clavier physique).
+function pressPrintScreen() {
+  const script = [
+    "$sig = '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte vk, byte scan, uint flags, System.UIntPtr extra);'",
+    '$k = Add-Type -MemberDefinition $sig -Name K -Namespace SnapitSmoke -PassThru',
+    '$k::keybd_event(0x2C, 0, 0, [UIntPtr]::Zero)',
+    '$k::keybd_event(0x2C, 0, 2, [UIntPtr]::Zero)',
+  ].join('\n');
+  execFileSync('powershell', ['-NoProfile', '-Command', script]);
+}
+
 async function key(win, keyCode, modifiers = []) {
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
   win.webContents.sendInputEvent({ type: 'char', keyCode, modifiers });
@@ -55,6 +67,47 @@ app.whenReady().then(async () => {
     const [home] = editorWindows();
     check("l'éditeur s'ouvre au démarrage", Boolean(home));
     await savePage(home, '0-accueil.png');
+
+    // 0. Impr. écran : l'assistant clavier doit la prendre avant l'Outil Capture de Windows
+    const hotkeys = snapit.getHotkeys();
+    for (let i = 0; i < 100 && !hotkeys.getStatus().hookAvailable && !hotkeys.getStatus().hookFailed; i++) await wait(100);
+    const status = hotkeys.getStatus();
+    check('assistant clavier démarré', status.hookAvailable, JSON.stringify(status.shortcuts));
+    if (status.hookAvailable) {
+      pressPrintScreen();
+      let overlayShown = false;
+      for (let i = 0; i < 40 && !overlayShown; i++) {
+        await wait(100);
+        overlayShown = BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/'));
+      }
+      check('Impr. écran ouvre la sélection Snapit', overlayShown);
+      const visible = BrowserWindow.getAllWindows().find((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/'));
+      if (visible) await key(visible, 'Escape');
+      for (let i = 0; i < 20 && BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/')); i++) await wait(100);
+      await wait(500);
+    }
+
+    // 0 bis. Paramètres : fenêtre, langue répercutée dans l'éditeur
+    snapit.openSettings();
+    let settingsWin = null;
+    for (let i = 0; i < 40 && !settingsWin; i++) {
+      await wait(100);
+      settingsWin = BrowserWindow.getAllWindows().find((w) => w.isVisible() && w.webContents.getURL().includes('/settings/'));
+    }
+    check('la fenêtre Paramètres s’ouvre', Boolean(settingsWin));
+    if (settingsWin) {
+      await wait(500);
+      const shortcut = await settingsWin.webContents.executeJavaScript('document.querySelector(".shortcut").textContent');
+      check('raccourci affiché dans les paramètres', shortcut.length > 0, shortcut);
+      await savePage(settingsWin, '0-parametres.png');
+      snapit.getSettings().set({ language: 'en' });
+      await wait(400);
+      const english = await home.webContents.executeJavaScript('document.querySelector("#btn-capture span").textContent');
+      check('changer de langue traduit l’éditeur', english === 'Capture', english);
+      snapit.getSettings().set({ language: 'auto' });
+      settingsWin.close();
+      await wait(300);
+    }
 
     // 1. Plein écran : l'image doit arriver dans l'éditeur vide existant
     await snapit.startCapture('fullscreen');
@@ -129,15 +182,19 @@ app.whenReady().then(async () => {
       const props = await region.webContents.executeJavaScript(`(() => {
         const arrow = state.shapes.find((s) => s.type === 'arrow');
         select(arrow);
-        setProp('heads', 'both');
-        setProp('outline', '#ffffff');
-        const changed = [arrow.heads, arrow.outline, document.querySelectorAll('#props-controls .prop').length];
+        // les réglages sont mémorisés d'une session à l'autre : on choisit des valeurs différentes des actuelles
+        const heads = arrow.heads === 'both' ? 'start' : 'both';
+        const original = arrow.outline;
+        const outline = original === '#ffffff' ? '#1c1c1f' : '#ffffff';
+        setProp('heads', heads);
+        setProp('outline', outline);
+        const ok = arrow.heads === heads && arrow.outline === outline;
         undo();
         const restored = state.shapes.find((s) => s.type === 'arrow');
-        return [...changed, restored.heads, restored.outline];
+        return [ok, document.querySelectorAll('#props-controls .prop').length, restored.outline === original, restored.heads === heads];
       })()`);
-      check('réglages appliqués à l’annotation sélectionnée', props[0] === 'both' && props[1] === '#ffffff' && props[2] > 5, props.join(', '));
-      check('Ctrl+Z annule un changement de réglage', props[4] === null, `outline=${props[4]}`);
+      check('réglages appliqués à l’annotation sélectionnée', props[0] && props[1] > 5, props.join(', '));
+      check('Ctrl+Z annule un changement de réglage', props[2] && props[3], props.join(', '));
       await key(region, 'y', ['control']);
 
       await key(region, 'c', ['control']);

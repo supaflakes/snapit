@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Snapit</title>
+  <link rel="stylesheet" href="../theme.css">
   <link rel="stylesheet" href="editor.css">
 </head>
 <body>
@@ -51,6 +52,9 @@
       <symbol id="i-bold" viewBox="0 0 24 24"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" stroke-width="2.4"/></symbol>
       <symbol id="i-italic" viewBox="0 0 24 24"><path d="M10 5h8M6 19h8M14 5l-4 14"/></symbol>
       <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"/><path d="M3.5 3.5v5h5"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+      <symbol id="i-plus-circle" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
       <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M6 12h12M12 6v12"/></symbol>
     </defs>
@@ -58,59 +62,60 @@
 
   <header class="toolbar">
     <div class="group capture-group">
-      <button class="btn primary" id="btn-capture" data-tip="Capturer une zone (Ctrl+N)">
-        <svg class="icon"><use href="#i-capture"/></svg><span>Capturer</span>
+      <button class="btn primary" id="btn-capture" data-i18n-tip="editor.captureTip">
+        <svg class="icon"><use href="#i-capture"/></svg><span data-i18n="editor.capture">Capturer</span>
       </button>
-      <button class="btn primary chevron" id="btn-capture-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Autres modes de capture">
+      <button class="btn primary chevron" id="btn-capture-menu" aria-haspopup="menu" aria-expanded="false" data-i18n-label="editor.moreModes">
         <svg class="icon"><use href="#i-chevron"/></svg>
       </button>
       <div class="menu" id="capture-menu" role="menu" hidden>
-        <button role="menuitem" data-action="capture-region"><svg class="icon"><use href="#i-capture"/></svg>Capturer une zone<kbd data-shortcut="region"></kbd></button>
-        <button role="menuitem" data-action="capture-fullscreen"><svg class="icon"><use href="#i-monitor"/></svg>Capturer l'écran entier<kbd data-shortcut="fullscreen"></kbd></button>
-        <button role="menuitem" data-action="capture-delay"><svg class="icon"><use href="#i-timer"/></svg>Capture différée (3 s)</button>
+        <button role="menuitem" data-action="capture-region"><svg class="icon"><use href="#i-capture"/></svg><span data-i18n="menu.region">Capturer une zone</span><kbd data-shortcut="region"></kbd></button>
+        <button role="menuitem" data-action="capture-fullscreen"><svg class="icon"><use href="#i-monitor"/></svg><span data-i18n="menu.fullscreen">Capturer l'écran entier</span><kbd data-shortcut="fullscreen"></kbd></button>
+        <button role="menuitem" data-action="capture-delay"><svg class="icon"><use href="#i-timer"/></svg><span id="menu-delay">Capture différée (3 s)</span><kbd data-shortcut="delay"></kbd></button>
         <hr>
-        <button role="menuitem" data-action="open"><svg class="icon"><use href="#i-folder"/></svg>Ouvrir une image…<kbd>Ctrl+O</kbd></button>
-        <button role="menuitem" data-action="paste"><svg class="icon"><use href="#i-paste"/></svg>Coller une image<kbd>Ctrl+V</kbd></button>
+        <button role="menuitem" data-action="open"><svg class="icon"><use href="#i-folder"/></svg><span data-i18n="menu.open">Ouvrir une image…</span><kbd>Ctrl+O</kbd></button>
+        <button role="menuitem" data-action="paste"><svg class="icon"><use href="#i-paste"/></svg><span data-i18n="menu.paste">Coller une image</span><kbd>Ctrl+V</kbd></button>
       </div>
     </div>
 
     <div class="divider"></div>
 
-    <div class="group tools needs-image" role="toolbar" aria-label="Outils">
-      <button class="btn tool" data-tool="select" data-tip="Sélection (V)" aria-label="Sélection"><svg class="icon"><use href="#i-select"/></svg></button>
-      <button class="btn tool" data-tool="arrow" data-tip="Flèche (A)" aria-label="Flèche"><svg class="icon"><use href="#i-arrow"/></svg></button>
-      <button class="btn tool" data-tool="rect" data-tip="Rectangle (R)" aria-label="Rectangle"><svg class="icon"><use href="#i-rect"/></svg></button>
-      <button class="btn tool" data-tool="ellipse" data-tip="Ellipse (E)" aria-label="Ellipse"><svg class="icon"><use href="#i-ellipse"/></svg></button>
-      <button class="btn tool" data-tool="line" data-tip="Ligne (L)" aria-label="Ligne"><svg class="icon"><use href="#i-line"/></svg></button>
-      <button class="btn tool" data-tool="pen" data-tip="Crayon (P)" aria-label="Crayon"><svg class="icon"><use href="#i-pen"/></svg></button>
-      <button class="btn tool" data-tool="marker" data-tip="Surligneur (H)" aria-label="Surligneur"><svg class="icon"><use href="#i-marker"/></svg></button>
-      <button class="btn tool" data-tool="text" data-tip="Texte (T)" aria-label="Texte"><svg class="icon"><use href="#i-text"/></svg></button>
-      <button class="btn tool" data-tool="step" data-tip="Étape numérotée (N)" aria-label="Étape numérotée"><svg class="icon"><use href="#i-step"/></svg></button>
-      <button class="btn tool" data-tool="blur" data-tip="Pixeliser (B)" aria-label="Pixeliser"><svg class="icon"><use href="#i-blur"/></svg></button>
-      <button class="btn tool" data-tool="crop" data-tip="Rogner (C)" aria-label="Rogner"><svg class="icon"><use href="#i-crop"/></svg></button>
+    <div class="group tools needs-image" role="toolbar" data-i18n-label="editor.tools">
+      <button class="btn tool" data-tool="select"><svg class="icon"><use href="#i-select"/></svg></button>
+      <button class="btn tool" data-tool="arrow"><svg class="icon"><use href="#i-arrow"/></svg></button>
+      <button class="btn tool" data-tool="rect"><svg class="icon"><use href="#i-rect"/></svg></button>
+      <button class="btn tool" data-tool="ellipse"><svg class="icon"><use href="#i-ellipse"/></svg></button>
+      <button class="btn tool" data-tool="line"><svg class="icon"><use href="#i-line"/></svg></button>
+      <button class="btn tool" data-tool="pen"><svg class="icon"><use href="#i-pen"/></svg></button>
+      <button class="btn tool" data-tool="marker"><svg class="icon"><use href="#i-marker"/></svg></button>
+      <button class="btn tool" data-tool="text"><svg class="icon"><use href="#i-text"/></svg></button>
+      <button class="btn tool" data-tool="step"><svg class="icon"><use href="#i-step"/></svg></button>
+      <button class="btn tool" data-tool="blur"><svg class="icon"><use href="#i-blur"/></svg></button>
+      <button class="btn tool" data-tool="crop"><svg class="icon"><use href="#i-crop"/></svg></button>
     </div>
 
     <div class="spacer"></div>
 
     <div class="group needs-image">
-      <button class="btn" id="btn-undo" data-tip="Annuler (Ctrl+Z)" aria-label="Annuler"><svg class="icon"><use href="#i-undo"/></svg></button>
-      <button class="btn" id="btn-redo" data-tip="Rétablir (Ctrl+Y)" aria-label="Rétablir"><svg class="icon"><use href="#i-redo"/></svg></button>
-      <button class="btn" id="btn-delete" data-tip="Supprimer l'annotation (Suppr)" aria-label="Supprimer l'annotation"><svg class="icon"><use href="#i-trash"/></svg></button>
+      <button class="btn" id="btn-undo" data-i18n-tip="editor.undo" data-i18n-label="editor.undo"><svg class="icon"><use href="#i-undo"/></svg></button>
+      <button class="btn" id="btn-redo" data-i18n-tip="editor.redo" data-i18n-label="editor.redo"><svg class="icon"><use href="#i-redo"/></svg></button>
+      <button class="btn" id="btn-delete" data-i18n-tip="editor.delete" data-i18n-label="editor.delete"><svg class="icon"><use href="#i-trash"/></svg></button>
     </div>
 
     <div class="divider"></div>
 
-    <div class="group needs-image">
-      <button class="btn labeled" id="btn-copy" data-tip="Copier l'image (Ctrl+C)"><svg class="icon"><use href="#i-copy"/></svg><span>Copier</span></button>
-      <button class="btn labeled" id="btn-save" data-tip="Enregistrer (Ctrl+S)"><svg class="icon"><use href="#i-save"/></svg><span>Enregistrer</span></button>
+    <div class="group">
+      <button class="btn labeled needs-image" id="btn-copy" data-i18n-tip="editor.copyTip"><svg class="icon"><use href="#i-copy"/></svg><span data-i18n="editor.copy">Copier</span></button>
+      <button class="btn labeled needs-image" id="btn-save" data-i18n-tip="editor.saveTip"><svg class="icon"><use href="#i-save"/></svg><span data-i18n="editor.save">Enregistrer</span></button>
+      <button class="btn tip-left" id="btn-settings" data-i18n-tip="editor.settings" data-i18n-label="editor.settings"><svg class="icon"><use href="#i-settings"/></svg></button>
     </div>
   </header>
 
-  <div class="popover" id="color-popover" role="dialog" aria-label="Choisir une couleur" hidden>
+  <div class="popover" id="color-popover" role="dialog" data-i18n-label="popover.label" hidden>
     <div class="popover-swatches" id="popover-swatches"></div>
     <div class="popover-row">
-      <button class="none-btn" id="popover-none" type="button"><span class="swatch-none"></span>Aucun</button>
-      <label class="custom-btn"><span class="custom-color"></span>Personnalisée<input type="color" id="popover-custom"></label>
+      <button class="none-btn" id="popover-none" type="button"><span class="swatch-none"></span><span data-i18n="popover.none">Aucun</span></button>
+      <label class="custom-btn"><span class="custom-color"></span><span data-i18n="popover.custom">Personnalisée</span><input type="color" id="popover-custom"></label>
     </div>
   </div>
 
@@ -119,31 +124,44 @@
     <div id="canvas-wrap">
       <canvas id="canvas"></canvas>
       <textarea id="text-editor" spellcheck="false" wrap="off" hidden></textarea>
+      <!-- poignées de rognage, comme dans Paint -->
+      <div class="crop-handle" data-edge="nw"></div>
+      <div class="crop-handle" data-edge="n"></div>
+      <div class="crop-handle" data-edge="ne"></div>
+      <div class="crop-handle" data-edge="e"></div>
+      <div class="crop-handle" data-edge="se"></div>
+      <div class="crop-handle" data-edge="s"></div>
+      <div class="crop-handle" data-edge="sw"></div>
+      <div class="crop-handle" data-edge="w"></div>
     </div>
 
     <section id="empty" aria-labelledby="empty-title">
       <div class="empty-card">
         <img src="../../assets/icon.png" alt="" width="64" height="64">
-        <h1 id="empty-title">Capturez, annotez, partagez</h1>
-        <p>Sélectionnez une zone de l'écran, puis ajoutez flèches, textes, étapes numérotées ou zones pixelisées.</p>
+        <h1 id="empty-title" data-i18n="empty.title">Capturez, annotez, partagez</h1>
+        <p data-i18n="empty.text">Sélectionnez une zone de l'écran, puis ajoutez flèches, textes, étapes numérotées ou zones pixelisées.</p>
         <div class="empty-actions">
-          <button class="btn primary big" data-action="capture-region"><svg class="icon"><use href="#i-capture"/></svg>Capturer une zone</button>
-          <button class="btn big" data-action="capture-fullscreen"><svg class="icon"><use href="#i-monitor"/></svg>Écran entier</button>
-          <button class="btn big" data-action="open"><svg class="icon"><use href="#i-folder"/></svg>Ouvrir une image</button>
+          <button class="btn primary big" data-action="capture-region"><svg class="icon"><use href="#i-capture"/></svg><span data-i18n="empty.region">Capturer une zone</span></button>
+          <button class="btn big" data-action="capture-fullscreen"><svg class="icon"><use href="#i-monitor"/></svg><span data-i18n="empty.fullscreen">Écran entier</span></button>
+          <button class="btn big" data-action="open"><svg class="icon"><use href="#i-folder"/></svg><span data-i18n="empty.open">Ouvrir une image</span></button>
         </div>
         <p class="empty-hint" id="empty-hint">Vous pouvez aussi coller une image (Ctrl+V) ou la glisser ici.</p>
       </div>
     </section>
 
-    <div id="drop-hint" hidden>Déposez l'image pour l'ouvrir</div>
+    <div id="drop-hint" data-i18n="editor.drop" hidden>Déposez l'image pour l'ouvrir</div>
   </main>
 
-  <aside class="panel" id="propsbar" aria-label="Propriétés de l'outil">
+  <aside class="panel" id="propsbar" data-i18n-label="panel.label">
     <div class="panel-head">
       <div class="props-title" id="props-title"></div>
-      <button class="btn mini" id="btn-reset-style" title="Rétablir les réglages par défaut" aria-label="Rétablir les réglages par défaut" hidden>
+      <button class="btn mini" id="btn-reset-style" data-i18n-title="panel.reset" data-i18n-label="panel.reset" hidden>
         <svg class="icon"><use href="#i-reset"/></svg>
       </button>
+    </div>
+    <div class="presets" id="presets" hidden>
+      <div class="presets-head"><span class="prop-label" data-i18n="presets.title">Préréglages</span></div>
+      <div class="preset-list" id="preset-list"></div>
     </div>
     <div class="props-controls" id="props-controls"></div>
   </aside>
@@ -153,16 +171,17 @@
     <span id="status-size"></span>
     <span id="status-hint" class="hint"></span>
     <div class="zoom needs-image">
-      <button class="btn mini" id="btn-zoom-out" aria-label="Zoom arrière"><svg class="icon"><use href="#i-minus"/></svg></button>
-      <button class="zoom-label" id="zoom-label" data-tip="Taille réelle (Ctrl+1)">100 %</button>
-      <button class="btn mini" id="btn-zoom-in" aria-label="Zoom avant"><svg class="icon"><use href="#i-plus"/></svg></button>
-      <button class="btn mini" id="btn-zoom-fit" data-tip="Ajuster à la fenêtre (Ctrl+0)" aria-label="Ajuster à la fenêtre"><svg class="icon"><use href="#i-fit"/></svg></button>
+      <button class="btn mini" id="btn-zoom-out" data-i18n-label="editor.zoomOut"><svg class="icon"><use href="#i-minus"/></svg></button>
+      <button class="zoom-label" id="zoom-label" data-i18n-tip="editor.zoomActual">100 %</button>
+      <button class="btn mini" id="btn-zoom-in" data-i18n-label="editor.zoomIn"><svg class="icon"><use href="#i-plus"/></svg></button>
+      <button class="btn mini" id="btn-zoom-fit" data-i18n-tip="editor.zoomFit" data-i18n-label="editor.zoomFit"><svg class="icon"><use href="#i-fit"/></svg></button>
     </div>
   </footer>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <input type="file" id="file-input" accept="image/*" hidden>
 
+  <script src="../i18n.js"></script>
   <script src="shapes.js"></script>
   <script src="editor.js"></script>
 </body>

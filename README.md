@@ -14,19 +14,25 @@ Snapit s'installe dans la zone de notification : fermer l'éditeur ne quitte pas
 
 ## Capturer
 
-| Raccourci global | Action |
+| Raccourci global (par défaut) | Action |
 | --- | --- |
 | `Impr. écran` | Capturer une zone |
 | `Maj+Impr. écran` | Capturer l'écran entier (écran sous la souris) |
-| `Alt+Maj+S` | Capturer une zone (alternative) |
+| `Ctrl+Impr. écran` | Capture différée (3 s par défaut) |
+
+Les raccourcis se changent dans **Paramètres** (icône ⚙ de l'éditeur ou menu de la zone de notification).
 
 Pendant la sélection : glisser pour choisir la zone, simple clic pour l'écran entier,
 `Échap` ou clic droit pour annuler. Une loupe affiche les pixels sous le curseur.
 Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %) sont gérés.
 
-> Sous Windows 11, si `Impr. écran` ouvre l'Outil Capture, désactivez
-> *Paramètres → Accessibilité → Clavier → « Utiliser le bouton Impr. écran pour ouvrir la capture d'écran »*,
-> ou utilisez `Alt+Maj+S`.
+### Impr. écran et l'Outil Capture de Windows
+
+Sous Windows 11, `Impr. écran` ouvre normalement l'Outil Capture. Tant que Snapit est ouvert (et que l'option
+« Utiliser Impr. écran pour Snapit » est active), un petit assistant intercepte la touche avant Windows :
+un hook clavier bas niveau (`src/native/keyhook.cs`) qui ne reconnaît que les combinaisons de capture configurées.
+Il est compilé au premier lancement avec le compilateur C# fourni avec Windows (.NET Framework) et se ferme avec Snapit.
+Aucun réglage de Windows n'est modifié : l'Outil Capture reprend la main dès que Snapit est fermé.
 
 ## Annoter
 
@@ -40,7 +46,9 @@ Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %) sont 
 | `T` | Texte (double-clic pour modifier) |
 | `N` | Étape numérotée (1, 2, 3…) |
 | `B` | Pixeliser une zone sensible |
-| `C` | Rogner |
+| `C` | Rogner en traçant la zone à garder |
+
+**Rogner comme dans Paint** : tirez les poignées autour de l'image (coins et milieux des bords). `Ctrl+Z` annule.
 
 ### Panneau de propriétés
 
@@ -59,28 +67,53 @@ Le panneau de droite affiche les réglages de l'outil actif, ou de l'annotation 
 Modifier un réglage s'applique à l'annotation sélectionnée et devient le réglage par défaut de l'outil.
 Chaque outil mémorise ses réglages d'une session à l'autre ; le bouton ↺ rétablit les valeurs d'origine.
 
+**Préréglages** : en haut du panneau, chaque outil propose des styles enregistrés, appliqués en un clic
+(à l'outil et à l'annotation sélectionnée). `+` enregistre le style actuel, `×` au survol supprime un préréglage.
+Ils sont conservés d'une capture et d'une session à l'autre.
+
 Autres raccourcis : `Ctrl+Z` / `Ctrl+Y` annuler / rétablir, `Suppr` supprimer,
 `Ctrl+C` copier l'image, `Ctrl+S` enregistrer (PNG ou JPEG), `Ctrl+O` ouvrir,
 `Ctrl+V` coller une image, `Ctrl+N` nouvelle capture, `Ctrl+molette` zoom,
 `Ctrl+0` ajuster, `Ctrl+1` taille réelle, `Espace`+glisser pour se déplacer.
 On peut aussi glisser-déposer une image dans la fenêtre.
 
+## Paramètres
+
+- **Langue** : automatique, français ou anglais (appliquée immédiatement à toutes les fenêtres).
+- **Thème** : système, sombre ou clair.
+- **Lancer au démarrage de Windows** (version installée uniquement).
+- **Raccourcis de capture** : cliquer sur un raccourci puis appuyer sur la combinaison voulue ; l'état de chaque
+  raccourci est affiché (actif, prioritaire sur l'Outil Capture, ou déjà pris par une autre application).
+- **Utiliser Impr. écran pour Snapit** plutôt que l'Outil Capture de Windows.
+- **Délai** de la capture différée, **copie automatique** de chaque capture dans le presse-papiers.
+- **Dossier et format** d'enregistrement par défaut.
+
+Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
+
 ## Développement
 
-- `npm run smoke` : test de bout en bout (capture plein écran, sélection de zone simulée,
-  annotations, annuler/rétablir, presse-papiers). Affiche brièvement l'overlay de sélection.
+- `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, capture plein écran,
+  sélection de zone simulée, annotations, réglages, annuler/rétablir, presse-papiers).
+  Affiche brièvement l'overlay de sélection.
 - `npm run icons` : régénère les icônes de `assets/`.
 - `npm run dist` : construit l'installateur Windows dans `dist/`.
 - `F12` ouvre les outils de développement (hors version packagée).
-- L'éditeur fonctionne aussi dans un navigateur pour itérer sur l'interface :
-  servir la racine du projet puis ouvrir `src/editor/index.html?demo`.
+- L'éditeur et les paramètres fonctionnent aussi dans un navigateur pour itérer sur l'interface :
+  servir la racine du projet puis ouvrir `src/editor/index.html?demo` (ajouter `&lang=en` pour l'anglais)
+  ou `src/settings/index.html`.
 
 ## Structure
 
 ```
-src/main.js            processus principal : zone de notification, raccourcis, capture, fenêtres
+src/main.js            processus principal : zone de notification, capture, fenêtres, IPC
+src/settings.js        paramètres de l'application (settings.json)
+src/hotkeys.js         raccourcis globaux et assistant clavier
+src/native/keyhook.cs  assistant clavier (hook bas niveau) pour Impr. écran
+src/i18n.js            traductions français / anglais, partagées par toutes les fenêtres
+src/theme.css          couleurs des thèmes sombre et clair
 src/preload.js         pont IPC exposé aux pages (contextIsolation + sandbox)
 src/overlay/           sélection de zone plein écran (une fenêtre par écran)
 src/editor/shapes.js   modèle, rendu et géométrie des annotations
-src/editor/editor.js   interface de l'éditeur : outils, historique, zoom, export
+src/editor/editor.js   interface de l'éditeur : outils, préréglages, historique, zoom, export
+src/settings/          fenêtre des paramètres
 ```

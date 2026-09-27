@@ -15,8 +15,10 @@ let mouse = null;
 let start = null;
 let selection = null;
 let frame = 0;
+let hint = '';
 
-window.snapit.onOverlayShow(async ({ dataUrl }) => {
+window.snapit.onOverlayShow(async ({ dataUrl, hint: text }) => {
+  hint = text ?? '';
   shot.src = dataUrl;
   try {
     await shot.decode();
@@ -172,9 +174,7 @@ function draw() {
     ctx.stroke();
   }
 
-  if (!start) {
-    pill('Glissez pour capturer une zone  ·  Clic : écran entier  ·  Échap : annuler', innerWidth / 2, 20, { align: 'center' });
-  }
+  if (!start && hint) pill(hint, innerWidth / 2, 20, { align: 'center' });
 
   drawLoupe();
 }
