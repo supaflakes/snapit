@@ -1,26 +1,45 @@
 'use strict';
 
-// Modèle, rendu et géométrie des annotations. Toutes les coordonnées sont en pixels de l'image.
+// Modèle, rendu et géométrie des annotations.
+// Les positions sont en pixels de l'image ; les réglages de style (épaisseur, taille de police…)
+// sont en pixels « logiques », multipliés par l'échelle de l'écran capturé (unit) au rendu.
 const Shapes = (() => {
-  const FONT_FAMILY = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
+  const FONTS = [
+    { name: 'Segoe UI', css: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif' },
+    { name: 'Arial', css: 'Arial, Helvetica, sans-serif' },
+    { name: 'Georgia', css: 'Georgia, "Times New Roman", serif' },
+    { name: 'Consolas', css: 'Consolas, "Cascadia Mono", monospace' },
+    { name: 'Comic Sans MS', css: '"Comic Sans MS", "Comic Neue", cursive' },
+    { name: 'Impact', css: 'Impact, "Arial Black", sans-serif' },
+  ];
+
+  const RED = '#e5484d';
+  const stroke = { outline: null, outlineWidth: 2, shadow: true, opacity: 100 };
+
+  // Réglages par défaut de chaque outil. Une annotation copie ces réglages à sa création.
+  const DEFAULTS = {
+    arrow: { color: RED, width: 5, heads: 'end', headStyle: 'filled', taper: true, dash: 'solid', ...stroke },
+    line: { color: RED, width: 4, dash: 'solid', ...stroke },
+    rect: { color: RED, width: 4, dash: 'solid', radius: 0, fill: null, fillOpacity: 25, ...stroke },
+    ellipse: { color: RED, width: 4, dash: 'solid', fill: null, fillOpacity: 25, ...stroke },
+    pen: { color: RED, width: 4, ...stroke },
+    marker: { color: '#ffc53d', width: 20, opacity: 45 },
+    text: { color: RED, fontFamily: 'Segoe UI', fontSize: 26, bold: true, italic: false, outline: '#ffffff', outlineWidth: 3, background: null, shadow: false },
+    step: { color: RED, stepSize: 15, stepShape: 'circle', outline: '#ffffff', outlineWidth: 2, shadow: true },
+    blur: { blurMode: 'pixelate', intensity: 10 },
+  };
+
   const BOX_TYPES = new Set(['rect', 'ellipse', 'blur']);
   const SEGMENT_TYPES = new Set(['line', 'arrow']);
   const PATH_TYPES = new Set(['pen', 'marker']);
 
-  // Échelles de taille, indexées par le sélecteur de taille (petit → très grand)
-  const SIZES = {
-    stroke: [2, 4, 7, 12],
-    marker: [12, 18, 28, 40],
-    font: [18, 26, 36, 52],
-    step: [11, 15, 20, 27],
-    block: [6, 10, 16, 24],
-  };
-
+  let U = 1; // échelle de l'écran capturé
   let seq = 0;
-  let scratch = null; // canvas réutilisé pour la pixelisation
+  let scratch = null; // canvas de pixelisation
+  let layer = null; // canvas intermédiaire pour l'opacité
 
   function luminance(hex) {
-    const n = parseInt(hex.slice(1), 16);
+    const n = parseInt(hex.slice(1, 7), 16);
     const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
       v /= 255;
       return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
@@ -29,6 +48,11 @@ const Shapes = (() => {
   }
 
   const isLight = (hex) => luminance(hex) > 0.45;
+
+  function hexToRgba(hex, alpha) {
+    const n = parseInt(hex.slice(1, 7), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  }
 
   function normRect(s) {
     return {
@@ -39,59 +63,25 @@ const Shapes = (() => {
     };
   }
 
-  function create(tool, p, { color, sizeIndex, unit }) {
-    const id = ++seq;
-    const size = (key) => SIZES[key][sizeIndex] * unit;
-    switch (tool) {
-      case 'rect':
-      case 'ellipse':
-        return { id, type: tool, x: p.x, y: p.y, w: 0, h: 0, color, width: size('stroke') };
-      case 'blur':
-        return { id, type: 'blur', x: p.x, y: p.y, w: 0, h: 0, block: size('block') };
-      case 'line':
-      case 'arrow':
-        return { id, type: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color, width: size('stroke') };
-      case 'pen':
-        return { id, type: 'pen', points: [[p.x, p.y]], color, width: size('stroke') };
-      case 'marker':
-        return { id, type: 'marker', points: [[p.x, p.y]], color, width: size('marker') };
-      case 'text': {
-        const fontSize = size('font');
-        return { id, type: 'text', x: p.x, y: p.y - fontSize * 0.65, text: '', color, size: fontSize };
-      }
-      case 'step':
-        return { id, type: 'step', x: p.x, y: p.y, n: 1, color, r: size('step') };
-      default:
-        return null;
-    }
+  function create(tool, p, style) {
+    const s = { id: ++seq, type: tool, ...structuredClone(style) };
+    if (BOX_TYPES.has(tool)) Object.assign(s, { x: p.x, y: p.y, w: 0, h: 0 });
+    else if (SEGMENT_TYPES.has(tool)) Object.assign(s, { x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+    else if (PATH_TYPES.has(tool)) s.points = [[p.x, p.y]];
+    else if (tool === 'text') Object.assign(s, { x: p.x, y: p.y - s.fontSize * U * 0.625, text: '' });
+    else if (tool === 'step') Object.assign(s, { x: p.x, y: p.y, n: 1 });
+    else return null;
+    return s;
   }
 
-  // Applique la taille courante à une annotation existante.
-  function applySize(s, sizeIndex, unit) {
-    const size = (key) => SIZES[key][sizeIndex] * unit;
-    switch (s.type) {
-      case 'marker': s.width = size('marker'); break;
-      case 'text': s.size = size('font'); break;
-      case 'step': s.r = size('step'); break;
-      case 'blur': s.block = size('block'); break;
-      default: s.width = size('stroke');
-    }
-  }
+  // --------------------------------------------------------------- texte
 
-  // Retrouve l'indice de taille le plus proche d'une annotation (pour synchroniser la barre d'outils).
-  function sizeIndexOf(s, unit) {
-    const [key, value] = {
-      marker: ['marker', s.width],
-      text: ['font', s.size],
-      step: ['step', s.r],
-      blur: ['block', s.block],
-    }[s.type] ?? ['stroke', s.width];
-    const scale = SIZES[key].map((v) => Math.abs(v * unit - value));
-    return scale.indexOf(Math.min(...scale));
+  function fontCss(family) {
+    return (FONTS.find((f) => f.name === family) ?? FONTS[0]).css;
   }
 
   function textFont(s) {
-    return `600 ${s.size}px ${FONT_FAMILY}`;
+    return `${s.italic ? 'italic ' : ''}${s.bold ? 700 : 400} ${s.fontSize * U}px ${fontCss(s.fontFamily)}`;
   }
 
   function textLines(s) {
@@ -102,11 +92,16 @@ const Shapes = (() => {
   function textBox(s) {
     measureCtx ??= document.createElement('canvas').getContext('2d');
     measureCtx.font = textFont(s);
+    const size = s.fontSize * U;
     const lines = textLines(s);
-    const w = Math.max(s.size * 0.5, ...lines.map((l) => measureCtx.measureText(l).width));
-    const pad = s.size * 0.2;
-    return { x: s.x - pad, y: s.y - pad, w: w + pad * 2, h: lines.length * s.size * 1.25 + pad * 2 };
+    const w = Math.max(size * 0.5, ...lines.map((l) => measureCtx.measureText(l).width));
+    const ow = s.outline ? s.outlineWidth * U : 0;
+    const padX = s.background ? size * 0.4 : Math.max(ow, size * 0.12);
+    const padY = s.background ? size * 0.2 : Math.max(ow, size * 0.08);
+    return { x: s.x - padX, y: s.y - padY, w: w + padX * 2, h: lines.length * size * 1.25 + padY * 2 };
   }
+
+  // ------------------------------------------------------------- bornes
 
   function bounds(s) {
     if (BOX_TYPES.has(s.type)) return normRect(s);
@@ -116,100 +111,233 @@ const Shapes = (() => {
     }
     if (PATH_TYPES.has(s.type)) {
       const xs = s.points.map((p) => p[0]), ys = s.points.map((p) => p[1]);
-      const half = s.width / 2;
+      const half = (s.width * U) / 2;
       const x = Math.min(...xs) - half, y = Math.min(...ys) - half;
       return { x, y, w: Math.max(...xs) + half - x, h: Math.max(...ys) + half - y };
     }
     if (s.type === 'text') return textBox(s);
-    if (s.type === 'step') return { x: s.x - s.r, y: s.y - s.r, w: s.r * 2, h: s.r * 2 };
+    if (s.type === 'step') {
+      const r = s.stepSize * U;
+      return { x: s.x - r, y: s.y - r, w: r * 2, h: r * 2 };
+    }
     return { x: 0, y: 0, w: 0, h: 0 };
   }
 
-  // ------------------------------------------------------------------ rendu
+  // Zone réellement peinte (traits épais, pointes, contour, ombre compris)
+  function paintBounds(s) {
+    const b = bounds(s);
+    const pad = ((s.width ?? 0) * 2.2 + (s.outline ? s.outlineWidth * 2 : 0) + 16) * U;
+    return { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 };
+  }
 
-  function setShadow(c, unit) {
+  // -------------------------------------------------------------- rendu
+
+  function setShadow(c) {
     c.shadowColor = 'rgba(0, 0, 0, 0.35)';
-    c.shadowBlur = 5 * unit;
-    c.shadowOffsetY = 1.5 * unit;
+    c.shadowBlur = 5 * U;
+    c.shadowOffsetY = 1.5 * U;
   }
 
-  function strokePath(c, points) {
-    c.beginPath();
+  function clearShadow(c) {
+    c.shadowColor = 'transparent';
+  }
+
+  function dashFor(dash, w) {
+    if (dash === 'dashed') return { pattern: [w * 2.5, w * 1.8], cap: 'butt' };
+    if (dash === 'dotted') return { pattern: [0.001, w * 2], cap: 'round' };
+    return { pattern: [], cap: 'round' };
+  }
+
+  function smoothPath(points) {
+    const path = new Path2D();
+    const [x0, y0] = points[0];
+    path.moveTo(x0, y0);
     if (points.length === 1) {
-      const [x, y] = points[0];
-      c.moveTo(x, y);
-      c.lineTo(x + 0.01, y);
-    } else {
-      c.moveTo(points[0][0], points[0][1]);
-      // lissage par courbes quadratiques passant par les milieux
-      for (let i = 1; i < points.length - 1; i++) {
-        const [x, y] = points[i];
-        const [nx, ny] = points[i + 1];
-        c.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
-      }
-      const last = points[points.length - 1];
-      c.lineTo(last[0], last[1]);
+      path.lineTo(x0 + 0.01, y0);
+      return path;
     }
-    c.stroke();
+    for (let i = 1; i < points.length - 1; i++) {
+      const [x, y] = points[i];
+      const [nx, ny] = points[i + 1];
+      path.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+    }
+    const [lx, ly] = points[points.length - 1];
+    path.lineTo(lx, ly);
+    return path;
   }
 
-  function drawArrow(c, s) {
-    const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
-    const len = Math.hypot(dx, dy);
-    if (len < 1) return;
-    const ux = dx / len, uy = dy / len;
-    const head = Math.min(len, s.width * 3 + 10);
+  // Décompose une flèche (ou une ligne) en traits et surfaces pleines.
+  function arrowParts(s) {
+    const w = s.width * U;
+    let { x1, y1, x2, y2 } = s;
+    let heads = s.type === 'line' ? 'none' : s.heads ?? 'end';
+    if (heads === 'start') {
+      [x1, y1, x2, y2] = [x2, y2, x1, y1];
+      heads = 'end';
+    }
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    if (len < 1) return null;
+    const ux = (x2 - x1) / len, uy = (y2 - y1) / len;
+    const style = s.headStyle ?? 'filled';
+    const dash = dashFor(s.dash, w);
+    const head = Math.min(len * (heads === 'both' ? 0.5 : 1), w * 3 + 10 * U);
     const half = head * 0.58;
-    const bx = s.x2 - ux * head, by = s.y2 - uy * head;
+    const parts = { strokes: [], fills: [] };
 
-    // corps effilé : fin à la base, pleine épaisseur au niveau de la pointe
-    const tail = Math.max(1, s.width * 0.35) / 2;
-    const neck = s.width / 2;
-    c.beginPath();
-    c.moveTo(s.x1 - uy * tail, s.y1 + ux * tail);
-    c.lineTo(bx - uy * neck, by + ux * neck);
-    c.lineTo(bx - uy * half, by + ux * half);
-    c.lineTo(s.x2, s.y2);
-    c.lineTo(bx + uy * half, by - ux * half);
-    c.lineTo(bx + uy * neck, by - ux * neck);
-    c.lineTo(s.x1 + uy * tail, s.y1 - ux * tail);
-    c.closePath();
+    // Corps effilé : un seul polygone, fin à la base et pleine épaisseur contre la pointe
+    if (s.taper && heads === 'end' && style === 'filled' && !dash.pattern.length) {
+      const bx = x2 - ux * head, by = y2 - uy * head;
+      const tail = Math.max(1, w * 0.35) / 2, neck = w / 2;
+      const p = new Path2D();
+      p.moveTo(x1 - uy * tail, y1 + ux * tail);
+      p.lineTo(bx - uy * neck, by + ux * neck);
+      p.lineTo(bx - uy * half, by + ux * half);
+      p.lineTo(x2, y2);
+      p.lineTo(bx + uy * half, by - ux * half);
+      p.lineTo(bx + uy * neck, by - ux * neck);
+      p.lineTo(x1 + uy * tail, y1 - ux * tail);
+      p.closePath();
+      parts.fills.push(p);
+      return parts;
+    }
+
+    // Ajoute une pointe en (tx, ty) orientée selon (dx, dy) ; renvoie où le corps doit s'arrêter.
+    const addHead = (tx, ty, dx, dy) => {
+      const bx = tx - dx * head, by = ty - dy * head;
+      if (style === 'open') {
+        const p = new Path2D();
+        p.moveTo(bx - dy * half, by + dx * half);
+        p.lineTo(tx, ty);
+        p.lineTo(bx + dy * half, by - dx * half);
+        parts.strokes.push({ path: p, width: w, cap: 'round', dash: [] });
+        return [tx, ty];
+      }
+      if (style === 'dot') {
+        const p = new Path2D();
+        p.arc(tx, ty, Math.max(w * 1.5, 3 * U), 0, Math.PI * 2);
+        parts.fills.push(p);
+        return [tx, ty];
+      }
+      const p = new Path2D();
+      p.moveTo(tx, ty);
+      p.lineTo(bx - dy * half, by + dx * half);
+      p.lineTo(bx + dy * half, by - dx * half);
+      p.closePath();
+      parts.fills.push(p);
+      return [tx - dx * head * 0.8, ty - dy * head * 0.8];
+    };
+
+    let [sx, sy, ex, ey] = [x1, y1, x2, y2];
+    if (heads === 'end' || heads === 'both') [ex, ey] = addHead(x2, y2, ux, uy);
+    if (heads === 'both') [sx, sy] = addHead(x1, y1, -ux, -uy);
+    const shaft = new Path2D();
+    shaft.moveTo(sx, sy);
+    shaft.lineTo(ex, ey);
+    parts.strokes.unshift({ path: shaft, width: w, cap: dash.cap, dash: dash.pattern });
+    return parts;
+  }
+
+  function paintParts(c, parts, color, extra) {
+    c.strokeStyle = color;
+    c.fillStyle = color;
     c.lineJoin = 'round';
-    c.lineWidth = Math.max(1, s.width * 0.25);
-    c.fill();
-    c.stroke();
+    for (const p of parts.strokes) {
+      c.lineWidth = p.width + extra;
+      c.lineCap = p.cap;
+      c.lineJoin = p.join ?? 'round';
+      c.setLineDash(p.dash);
+      c.stroke(p.path);
+    }
+    c.setLineDash([]);
+    c.lineJoin = 'round';
+    for (const f of parts.fills) {
+      c.fill(f);
+      if (extra) {
+        c.lineWidth = extra;
+        c.stroke(f);
+      }
+    }
+  }
+
+  // Contour (s'il existe) puis tracé principal ; l'ombre n'est portée que par la première passe.
+  function paintWithOutline(c, s, parts) {
+    if (s.shadow) setShadow(c);
+    if (s.outline) {
+      paintParts(c, parts, s.outline, s.outlineWidth * U * 2);
+      clearShadow(c);
+    }
+    paintParts(c, parts, s.color, 0);
+  }
+
+  function strokeParts(s, path, join) {
+    const w = s.width * U;
+    const dash = dashFor(s.dash, w);
+    return { strokes: [{ path, width: w, cap: dash.cap, dash: dash.pattern, join }], fills: [] };
+  }
+
+  function drawBox(c, s) {
+    const r = normRect(s);
+    const path = new Path2D();
+    if (s.type === 'ellipse') path.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+    else path.roundRect(r.x, r.y, r.w, r.h, Math.min(s.radius * U, r.w / 2, r.h / 2));
+    if (s.fill) {
+      c.fillStyle = hexToRgba(s.fill, s.fillOpacity / 100);
+      c.fill(path);
+    }
+    const sharp = s.type === 'rect' && !s.radius;
+    paintWithOutline(c, s, strokeParts(s, path, sharp ? 'miter' : 'round'));
   }
 
   function drawText(c, s) {
+    const size = s.fontSize * U;
+    const lh = size * 1.25;
     c.font = textFont(s);
     c.textBaseline = 'top';
-    const lh = s.size * 1.25;
-    const halo = isLight(s.color) ? 'rgba(0, 0, 0, 0.85)' : '#fff';
     c.lineJoin = 'round';
-    c.lineWidth = Math.max(2, s.size * 0.16);
-    c.strokeStyle = halo;
-    textLines(s).forEach((line, i) => {
-      const y = s.y + i * lh + s.size * 0.1;
-      c.strokeText(line, s.x, y);
-      c.fillText(line, s.x, y);
-    });
+    if (s.background) {
+      const b = textBox(s);
+      c.save();
+      if (s.shadow) setShadow(c);
+      c.fillStyle = s.background;
+      c.beginPath();
+      c.roundRect(b.x, b.y, b.w, b.h, size * 0.25);
+      c.fill();
+      c.restore();
+    } else if (s.shadow) {
+      setShadow(c);
+    }
+    const lines = textLines(s);
+    const y = (i) => s.y + i * lh + size * 0.125;
+    if (s.outline) {
+      c.strokeStyle = s.outline;
+      c.lineWidth = s.outlineWidth * U * 2;
+      lines.forEach((line, i) => c.strokeText(line, s.x, y(i)));
+      clearShadow(c);
+    }
+    c.fillStyle = s.color;
+    lines.forEach((line, i) => c.fillText(line, s.x, y(i)));
   }
 
-  function drawStep(c, s, unit) {
-    c.save();
-    setShadow(c, unit);
-    c.beginPath();
-    c.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    c.fill();
-    c.restore();
-    c.lineWidth = Math.max(1.5, s.r * 0.13);
-    c.strokeStyle = isLight(s.color) ? 'rgba(0, 0, 0, 0.75)' : '#fff';
-    c.stroke();
+  function drawStep(c, s) {
+    const r = s.stepSize * U;
+    const path = new Path2D();
+    if (s.stepShape === 'square') path.roundRect(s.x - r, s.y - r, r * 2, r * 2, r * 0.3);
+    else path.arc(s.x, s.y, r, 0, Math.PI * 2);
+    if (s.shadow) setShadow(c);
+    c.fillStyle = s.color;
+    c.fill(path);
+    clearShadow(c);
+    if (s.outline) {
+      c.strokeStyle = s.outline;
+      c.lineWidth = s.outlineWidth * U;
+      c.stroke(path);
+    }
+    const label = String(s.n);
     c.fillStyle = isLight(s.color) ? '#111' : '#fff';
-    c.font = `700 ${s.r * 1.15}px ${FONT_FAMILY}`;
+    c.font = `700 ${r * (label.length > 2 ? 0.75 : label.length > 1 ? 0.95 : 1.15)}px ${fontCss('Segoe UI')}`;
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.fillText(String(s.n), s.x, s.y + s.r * 0.06);
+    c.fillText(label, s.x, s.y + r * 0.06);
   }
 
   function drawBlur(c, s, base) {
@@ -218,8 +346,23 @@ const Shapes = (() => {
     const w = Math.min(base.width, Math.ceil(r.x + r.w)) - x;
     const h = Math.min(base.height, Math.ceil(r.y + r.h)) - y;
     if (w < 1 || h < 1) return;
-    const sw = Math.max(1, Math.round(w / s.block));
-    const sh = Math.max(1, Math.round(h / s.block));
+    const amount = s.intensity * U;
+
+    if (s.blurMode === 'blur') {
+      const m = Math.ceil(amount * 2);
+      const sx = Math.max(0, x - m), sy = Math.max(0, y - m);
+      const sw = Math.min(base.width, x + w + m) - sx, sh = Math.min(base.height, y + h + m) - sy;
+      c.beginPath();
+      c.rect(x, y, w, h);
+      c.clip();
+      c.filter = `blur(${amount * 0.6}px)`;
+      c.drawImage(base, sx, sy, sw, sh, sx, sy, sw, sh);
+      c.filter = 'none';
+      return;
+    }
+
+    const sw = Math.max(1, Math.round(w / amount));
+    const sh = Math.max(1, Math.round(h / amount));
     scratch ??= document.createElement('canvas');
     if (scratch.width < sw || scratch.height < sh) {
       scratch.width = Math.max(scratch.width, sw);
@@ -233,55 +376,35 @@ const Shapes = (() => {
     c.drawImage(scratch, 0, 0, sw, sh, x, y, w, h);
   }
 
-  function draw(c, s, { base, unit }) {
+  function drawRaw(c, s, base) {
     c.save();
     c.lineCap = 'round';
     c.lineJoin = 'round';
-    c.strokeStyle = s.color;
-    c.fillStyle = s.color;
-    c.lineWidth = s.width;
     switch (s.type) {
-      case 'rect': {
-        const r = normRect(s);
-        setShadow(c, unit);
-        c.lineJoin = 'miter';
-        c.strokeRect(r.x, r.y, r.w, r.h);
+      case 'rect':
+      case 'ellipse':
+        drawBox(c, s);
         break;
-      }
-      case 'ellipse': {
-        const r = normRect(s);
-        setShadow(c, unit);
-        c.beginPath();
-        c.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
-        c.stroke();
-        break;
-      }
       case 'line':
-        setShadow(c, unit);
-        c.beginPath();
-        c.moveTo(s.x1, s.y1);
-        c.lineTo(s.x2, s.y2);
-        c.stroke();
+      case 'arrow': {
+        const parts = arrowParts(s);
+        if (parts) paintWithOutline(c, s, parts);
         break;
-      case 'arrow':
-        setShadow(c, unit);
-        drawArrow(c, s);
-        break;
+      }
       case 'pen':
-        setShadow(c, unit);
-        strokePath(c, s.points);
+        paintWithOutline(c, s, { strokes: [{ path: smoothPath(s.points), width: s.width * U, cap: 'round', dash: [] }], fills: [] });
         break;
       case 'marker':
-        c.globalAlpha = 0.45;
-        c.globalCompositeOperation = 'multiply';
+        c.strokeStyle = s.color;
+        c.lineWidth = s.width * U;
         c.lineCap = 'square';
-        strokePath(c, s.points);
+        c.stroke(smoothPath(s.points));
         break;
       case 'text':
         drawText(c, s);
         break;
       case 'step':
-        drawStep(c, s, unit);
+        drawStep(c, s);
         break;
       case 'blur':
         drawBlur(c, s, base);
@@ -290,7 +413,37 @@ const Shapes = (() => {
     c.restore();
   }
 
-  // -------------------------------------------------------------- géométrie
+  // Les annotations semi-transparentes sont d'abord peintes sur un calque, pour que
+  // contour et trait ne se superposent pas en transparence.
+  function draw(c, s, { base }) {
+    const alpha = (s.opacity ?? 100) / 100;
+    if (alpha >= 1 && s.type !== 'marker') {
+      drawRaw(c, s, base);
+      return;
+    }
+    const b = paintBounds(s);
+    const x = Math.floor(b.x), y = Math.floor(b.y);
+    const w = Math.ceil(b.w) + 1, h = Math.ceil(b.h) + 1;
+    if (w < 1 || h < 1) return;
+    layer ??= document.createElement('canvas');
+    if (layer.width < w || layer.height < h) {
+      layer.width = Math.max(layer.width, w);
+      layer.height = Math.max(layer.height, h);
+    }
+    const lc = layer.getContext('2d');
+    lc.setTransform(1, 0, 0, 1, 0, 0);
+    lc.clearRect(0, 0, w, h);
+    lc.setTransform(1, 0, 0, 1, -x, -y);
+    drawRaw(lc, s, base);
+    c.save();
+    c.globalAlpha = alpha;
+    // le surligneur fonce le fond comme un vrai feutre
+    if (s.type === 'marker') c.globalCompositeOperation = 'multiply';
+    c.drawImage(layer, 0, 0, w, h, x, y, w, h);
+    c.restore();
+  }
+
+  // ----------------------------------------------------------- géométrie
 
   function distToSegment(px, py, x1, y1, x2, y2) {
     const dx = x2 - x1, dy = y2 - y1;
@@ -301,33 +454,34 @@ const Shapes = (() => {
   }
 
   function hit(s, p, tol) {
+    const w = (s.width ?? 0) * U;
     switch (s.type) {
       case 'rect':
       case 'blur':
       case 'text': {
         const r = s.type === 'text' ? textBox(s) : normRect(s);
-        const pad = tol + (s.width ?? 0) / 2;
+        const pad = tol + w / 2;
         return p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad;
       }
       case 'ellipse': {
         const r = normRect(s);
-        const rx = r.w / 2 + tol + s.width / 2, ry = r.h / 2 + tol + s.width / 2;
+        const rx = r.w / 2 + tol + w / 2, ry = r.h / 2 + tol + w / 2;
         return ((p.x - r.x - r.w / 2) / rx) ** 2 + ((p.y - r.y - r.h / 2) / ry) ** 2 <= 1;
       }
       case 'line':
       case 'arrow':
-        return distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= s.width / 2 + tol + (s.type === 'arrow' ? s.width : 0);
+        return distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= w / 2 + tol + (s.type === 'arrow' ? w : 0);
       case 'pen':
       case 'marker': {
         const pts = s.points;
-        if (pts.length === 1) return Math.hypot(p.x - pts[0][0], p.y - pts[0][1]) <= s.width / 2 + tol;
+        if (pts.length === 1) return Math.hypot(p.x - pts[0][0], p.y - pts[0][1]) <= w / 2 + tol;
         for (let i = 1; i < pts.length; i++) {
-          if (distToSegment(p.x, p.y, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) <= s.width / 2 + tol) return true;
+          if (distToSegment(p.x, p.y, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) <= w / 2 + tol) return true;
         }
         return false;
       }
       case 'step':
-        return Math.hypot(p.x - s.x, p.y - s.y) <= s.r + tol;
+        return Math.hypot(p.x - s.x, p.y - s.y) <= s.stepSize * U + tol;
       default:
         return false;
     }
@@ -401,10 +555,12 @@ const Shapes = (() => {
   }
 
   return {
-    SIZES,
+    FONTS,
+    DEFAULTS,
+    setUnit: (u) => {
+      U = u;
+    },
     create,
-    applySize,
-    sizeIndexOf,
     draw,
     bounds,
     hit,
@@ -416,8 +572,7 @@ const Shapes = (() => {
     normRect,
     isDegenerate,
     textFont,
-    textBox,
+    fontCss,
     isLight,
-    hasColor: (s) => s.type !== 'blur',
   };
 })();

@@ -41,9 +41,23 @@ Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %) sont 
 | `N` | Étape numérotée (1, 2, 3…) |
 | `B` | Pixeliser une zone sensible |
 | `C` | Rogner |
-| `1`–`4` | Taille du trait |
 
-Changer la couleur ou la taille s'applique aussi à l'annotation sélectionnée.
+### Panneau de propriétés
+
+Le panneau de droite affiche les réglages de l'outil actif, ou de l'annotation sélectionnée :
+
+| Outil | Réglages |
+| --- | --- |
+| Flèche | couleur, épaisseur, pointes (fin / début / deux bouts / aucune), forme de pointe (pleine / ouverte / point), corps effilé, trait (continu / tirets / pointillés), contour, ombre, opacité |
+| Ligne | couleur, épaisseur, trait, contour, ombre, opacité |
+| Rectangle / Ellipse | couleur, épaisseur, trait, arrondi (rectangle), remplissage et son opacité, contour, ombre, opacité |
+| Crayon / Surligneur | couleur, épaisseur, contour, ombre, opacité |
+| Texte | couleur, police, taille, gras, italique, contour, fond, ombre |
+| Étape | couleur, taille, forme (cercle / carré), numéro, contour, ombre |
+| Pixeliser | effet (pixeliser / flouter), intensité |
+
+Modifier un réglage s'applique à l'annotation sélectionnée et devient le réglage par défaut de l'outil.
+Chaque outil mémorise ses réglages d'une session à l'autre ; le bouton ↺ rétablit les valeurs d'origine.
 
 Autres raccourcis : `Ctrl+Z` / `Ctrl+Y` annuler / rétablir, `Suppr` supprimer,
 `Ctrl+C` copier l'image, `Ctrl+S` enregistrer (PNG ou JPEG), `Ctrl+O` ouvrir,

@@ -21,7 +21,117 @@ const COLORS = [
   ['#ffffff', 'Blanc'],
   ['#1c1c1f', 'Noir'],
 ];
-const SIZE_LABELS = ['Fin', 'Moyen', 'Épais', 'Très épais'];
+// Palette étendue proposée dans le sélecteur de couleur (fond, contour…)
+const PALETTE = [
+  ...COLORS,
+  ['#ff8dc7', 'Rose'],
+  ['#ffe629', 'Jaune vif'],
+  ['#7ce2fe', 'Bleu ciel'],
+  ['#3dd68c', 'Vert menthe'],
+  ['#fff7c2', 'Crème'],
+  ['#e0e1e6', 'Gris clair'],
+  ['#8b8d98', 'Gris'],
+  ['#3a3a44', 'Anthracite'],
+];
+
+const TOOL_LABELS = {
+  arrow: ['Flèche', 'i-arrow'],
+  line: ['Ligne', 'i-line'],
+  rect: ['Rectangle', 'i-rect'],
+  ellipse: ['Ellipse', 'i-ellipse'],
+  pen: ['Crayon', 'i-pen'],
+  marker: ['Surligneur', 'i-marker'],
+  text: ['Texte', 'i-text'],
+  step: ['Étape', 'i-step'],
+  blur: ['Pixeliser', 'i-blur'],
+  select: ['Sélection', 'i-select'],
+  crop: ['Rogner', 'i-crop'],
+};
+
+// Contrôles de la barre de propriétés. « when » masque un contrôle selon les autres réglages.
+const CONTROLS = {
+  color: { label: 'Couleur', type: 'swatches' },
+  width: { label: 'Épaisseur', type: 'range', min: 1, max: 40, suffix: ' px' },
+  heads: {
+    label: 'Pointes',
+    type: 'segmented',
+    options: [['end', 'i-head-end', 'À la fin'], ['start', 'i-head-start', 'Au début'], ['both', 'i-head-both', 'Aux deux bouts'], ['none', 'i-head-none', 'Aucune']],
+  },
+  headStyle: {
+    label: 'Forme',
+    type: 'segmented',
+    options: [['filled', 'i-hs-filled', 'Pointe pleine'], ['open', 'i-hs-open', 'Pointe ouverte'], ['dot', 'i-hs-dot', 'Point']],
+    when: (v) => v.heads !== 'none',
+  },
+  taper: {
+    label: 'Corps effilé',
+    type: 'toggle',
+    icon: 'i-taper',
+    text: 'Corps effilé',
+    when: (v) => (v.heads === 'end' || v.heads === 'start') && v.headStyle === 'filled' && v.dash === 'solid',
+  },
+  dash: {
+    label: 'Trait',
+    type: 'segmented',
+    options: [['solid', 'i-dash-solid', 'Continu'], ['dashed', 'i-dash-dashed', 'Tirets'], ['dotted', 'i-dash-dotted', 'Pointillés']],
+  },
+  radius: { label: 'Arrondi', type: 'range', min: 0, max: 60, suffix: ' px' },
+  fill: { label: 'Remplissage', type: 'color', none: true },
+  fillOpacity: { label: 'Opacité du fond', type: 'range', min: 5, max: 100, suffix: ' %', when: (v) => v.fill },
+  fontFamily: { label: 'Police', type: 'select', options: Shapes.FONTS.map((f) => [f.name, f.name]) },
+  fontSize: { label: 'Taille', type: 'number', min: 6, max: 400, step: 1 },
+  bold: { label: 'Gras', type: 'toggle', icon: 'i-bold' },
+  italic: { label: 'Italique', type: 'toggle', icon: 'i-italic' },
+  background: { label: 'Fond', type: 'color', none: true },
+  stepSize: { label: 'Taille', type: 'range', min: 8, max: 80, suffix: ' px' },
+  stepShape: { label: 'Forme', type: 'segmented', options: [['circle', 'i-step-circle', 'Cercle'], ['square', 'i-step-square', 'Carré']] },
+  number: { label: 'Numéro', type: 'number', min: 0, max: 9999, step: 1 },
+  blurMode: { label: 'Effet', type: 'segmented', options: [['pixelate', 'i-blur', 'Pixeliser'], ['blur', 'i-blur-soft', 'Flouter']] },
+  intensity: { label: 'Intensité', type: 'range', min: 2, max: 50 },
+  outline: { label: 'Contour', type: 'color', none: true },
+  outlineWidth: { label: 'Épaisseur du contour', type: 'range', min: 1, max: 12, suffix: ' px', when: (v) => v.outline },
+  shadow: { label: 'Ombre', type: 'toggle', icon: 'i-shadow', text: 'Ombre' },
+  opacity: { label: 'Opacité', type: 'range', min: 10, max: 100, suffix: ' %' },
+};
+
+const TOOL_PROPS = {
+  arrow: ['color', 'width', 'heads', 'headStyle', 'taper', 'dash', 'outline', 'outlineWidth', 'shadow', 'opacity'],
+  line: ['color', 'width', 'dash', 'outline', 'outlineWidth', 'shadow', 'opacity'],
+  rect: ['color', 'width', 'dash', 'radius', 'fill', 'fillOpacity', 'outline', 'outlineWidth', 'shadow', 'opacity'],
+  ellipse: ['color', 'width', 'dash', 'fill', 'fillOpacity', 'outline', 'outlineWidth', 'shadow', 'opacity'],
+  pen: ['color', 'width', 'outline', 'outlineWidth', 'shadow', 'opacity'],
+  marker: ['color', 'width', 'opacity'],
+  text: ['color', 'fontFamily', 'fontSize', 'bold', 'italic', 'outline', 'outlineWidth', 'background', 'shadow'],
+  step: ['color', 'stepSize', 'stepShape', 'number', 'outline', 'outlineWidth', 'shadow'],
+  blur: ['blurMode', 'intensity'],
+};
+
+const STYLES_KEY = 'snapit.toolStyles.v1';
+
+// Réglages par outil, mémorisés entre les sessions.
+function loadStyles() {
+  const styles = structuredClone(Shapes.DEFAULTS);
+  try {
+    const saved = JSON.parse(localStorage.getItem(STYLES_KEY) || '{}');
+    for (const [tool, values] of Object.entries(saved)) {
+      if (!styles[tool] || typeof values !== 'object') continue;
+      for (const key of Object.keys(styles[tool])) {
+        if (key in values) styles[tool][key] = values[key];
+      }
+    }
+  } catch {
+    // réglages illisibles : on garde les valeurs par défaut
+  }
+  return styles;
+}
+
+function saveStyles() {
+  try {
+    localStorage.setItem(STYLES_KEY, JSON.stringify(state.styles));
+  } catch {
+    // stockage indisponible : les réglages ne dureront que la session
+  }
+}
 
 const TOOLS = {
   select: { key: 'v', cursor: 'default', hint: 'Cliquez sur une annotation pour la sélectionner, la déplacer ou la redimensionner. Flèches du clavier pour ajuster.' },
@@ -42,8 +152,8 @@ const state = {
   shapes: [],
   tool: 'arrow',
   lastDrawTool: 'arrow',
-  color: COLORS[0][0],
-  sizeIndex: 1,
+  styles: null, // réglages de chaque outil (voir loadStyles)
+  nextStep: null, // numéro imposé pour la prochaine étape (null : à la suite des existantes)
   unit: 1, // facteur d'échelle de l'écran capturé : garde des annotations lisibles en haute densité
   selected: null,
   scale: 1, // pixels CSS par pixel d'image
@@ -58,6 +168,8 @@ let interaction = null;
 let textEdit = null;
 let spaceDown = false;
 let renderQueued = false;
+
+state.styles = loadStyles();
 
 // ---------------------------------------------------------------- historique
 
@@ -123,8 +235,10 @@ async function loadImage({ dataUrl, scaleFactor = 1, name }) {
   state.unit = Math.max(1, scaleFactor || 1);
   state.name = name || defaultName();
   state.fit = true;
+  state.nextStep = null;
   undoStack.length = 0;
   redoStack.length = 0;
+  Shapes.setUnit(state.unit);
 
   document.body.classList.add('has-image');
   api?.setHasImage(true);
@@ -132,6 +246,7 @@ async function loadImage({ dataUrl, scaleFactor = 1, name }) {
   layout();
   requestRender();
   updateButtons();
+  renderPropsBar();
   stage.focus();
 }
 
@@ -277,7 +392,7 @@ function layout() {
   canvas.style.height = `${state.base.height * state.scale}px`;
   $('#zoom-label').textContent = `${Math.round(state.scale * (window.devicePixelRatio || 1) * 100)} %`;
   setStatusSize(`${state.base.width} × ${state.base.height} px`);
-  if (textEdit) positionTextEditor();
+  if (textEdit) styleTextEditor();
   requestRender();
 }
 
@@ -319,18 +434,9 @@ function zoomActual() {
 
 function select(shape) {
   state.selected = shape;
-  if (shape) syncToolbarFrom(shape);
   updateButtons();
+  renderPropsBar();
   requestRender();
-}
-
-function syncToolbarFrom(s) {
-  if (Shapes.hasColor(s)) {
-    state.color = s.color;
-    $('#custom-color').value = s.color;
-  }
-  state.sizeIndex = Shapes.sizeIndexOf(s, state.unit);
-  renderProps();
 }
 
 function deleteSelected() {
@@ -344,6 +450,7 @@ function deleteSelected() {
 }
 
 function nextStepNumber() {
+  if (state.nextStep != null) return state.nextStep;
   const steps = state.shapes.filter((s) => s.type === 'step').map((s) => s.n);
   return steps.length ? Math.max(...steps) + 1 : 1;
 }
@@ -376,35 +483,41 @@ function startTextEdit(shape, { before = snapshot(), isNew = false } = {}) {
   textEditor.setSelectionRange(textEditor.value.length, textEditor.value.length);
 }
 
+// Le champ de saisie imite le rendu final (police, contour, fond) pendant l'écriture.
 function styleTextEditor() {
   const s = textEdit.shape;
-  textEditor.style.fontSize = `${s.size * state.scale}px`;
-  textEditor.style.color = s.color;
-  const halo = Shapes.isLight(s.color) ? 'rgba(0,0,0,.85)' : '#fff';
-  const r = Math.max(1, s.size * state.scale * 0.08);
-  textEditor.style.textShadow = [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]
-    .map(([x, y]) => `${x}px ${y}px 0 ${halo}`)
-    .join(', ');
-  autosizeTextEditor();
+  const size = s.fontSize * state.unit * state.scale;
+  const st = textEditor.style;
+  st.fontFamily = Shapes.fontCss(s.fontFamily);
+  st.fontWeight = s.bold ? '700' : '400';
+  st.fontStyle = s.italic ? 'italic' : 'normal';
+  st.fontSize = `${size}px`;
+  st.color = s.color;
+  st.background = s.background ?? 'transparent';
+  st.borderRadius = `${size * 0.25}px`;
+  const r = s.outline ? Math.max(0.5, s.outlineWidth * state.unit * state.scale) : 0;
+  st.textShadow = r
+    ? [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]].map(([x, y]) => `${x}px ${y}px 0 ${s.outline}`).join(', ')
+    : 'none';
+  positionTextEditor();
 }
 
 function positionTextEditor() {
   const s = textEdit.shape;
-  textEditor.style.left = `${s.x * state.scale}px`;
-  // le line-height (1.25) du textarea ajoute un demi-interligne au-dessus du texte : on le compense
-  textEditor.style.top = `${(s.y + s.size * 0.1 - s.size * 0.125) * state.scale}px`;
-  styleTextEditorSizeOnly();
-}
-
-function styleTextEditorSizeOnly() {
-  textEditor.style.fontSize = `${textEdit.shape.size * state.scale}px`;
+  // même boîte que le rendu : le line-height 1.25 du champ place le texte comme sur le canvas
+  const b = Shapes.bounds(s);
+  const padX = (s.x - b.x) * state.scale;
+  const padY = (s.y - b.y) * state.scale;
+  textEditor.style.padding = `${padY}px ${padX}px`;
+  textEditor.style.left = `${b.x * state.scale}px`;
+  textEditor.style.top = `${b.y * state.scale}px`;
   autosizeTextEditor();
 }
 
 function autosizeTextEditor() {
   textEditor.style.width = '0px';
   textEditor.style.height = '0px';
-  const fs = textEdit.shape.size * state.scale;
+  const fs = textEdit.shape.fontSize * state.unit * state.scale;
   textEditor.style.width = `${textEditor.scrollWidth + fs * 0.6}px`;
   textEditor.style.height = `${textEditor.scrollHeight}px`;
 }
@@ -423,6 +536,7 @@ function commitTextEdit() {
     commit(before);
   }
   updateButtons();
+  renderPropsBar();
   requestRender();
   stage.focus();
 }
@@ -448,8 +562,10 @@ textEditor.addEventListener('keydown', (e) => {
 });
 textEditor.addEventListener('blur', () => {
   // laisse le clic suivant se traiter avant de valider (évite de recréer un texte au même endroit)
+  // (sauf si l'on règle la police ou la couleur dans la barre de propriétés)
   setTimeout(() => {
-    if (textEdit && document.activeElement !== textEditor) commitTextEdit();
+    const active = document.activeElement;
+    if (textEdit && active !== textEditor && !active?.closest('#propsbar, #color-popover')) commitTextEdit();
   }, 0);
 });
 
@@ -521,9 +637,12 @@ function onPointerDown(e) {
   }
 
   const before = snapshot();
-  const shape = Shapes.create(tool, p, { color: state.color, sizeIndex: state.sizeIndex, unit: state.unit });
+  const shape = Shapes.create(tool, p, state.styles[tool]);
   if (!shape) return;
-  if (tool === 'step') shape.n = nextStepNumber();
+  if (tool === 'step') {
+    shape.n = nextStepNumber();
+    if (state.nextStep != null) state.nextStep = shape.n + 1;
+  }
   state.shapes.push(shape);
 
   if (tool === 'text') {
@@ -711,75 +830,457 @@ function setTool(tool) {
   commitTextEdit();
   state.tool = tool;
   if (!['select', 'crop'].includes(tool)) state.lastDrawTool = tool;
-  if (tool === 'crop') select(null);
+  // la barre de propriétés doit refléter le nouvel outil, pas l'annotation d'un autre type
+  if (tool === 'crop' || (state.selected && tool !== 'select' && state.selected.type !== tool)) select(null);
   $$('.tool').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === tool)));
   $('#status-hint').textContent = TOOLS[tool].hint;
   stage.style.cursor = TOOLS[tool].cursor;
+  renderPropsBar();
 }
 
-function renderProps() {
-  $$('.swatch').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.color === state.color)));
-  $$('.size').forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.size) === state.sizeIndex)));
+// ------------------------------------------------------- barre de propriétés
+// Affiche les réglages de l'annotation sélectionnée, sinon ceux de l'outil actif.
+// Modifier un réglage met à jour l'annotation sélectionnée ET devient le réglage par défaut de l'outil.
+
+let propsKey = null;
+let propControls = [];
+let pendingEdit = null; // modification continue (curseur glissé) : un seul pas d'annulation
+let popover = null; // { anchor, key } du sélecteur de couleur ouvert
+
+function propsContext() {
+  const shape = textEdit?.shape ?? state.selected;
+  if (shape && TOOL_PROPS[shape.type]) return { type: shape.type, shape };
+  if (TOOL_PROPS[state.tool]) return { type: state.tool, shape: null };
+  return { type: null, shape: null };
 }
 
-// Change la couleur ou la taille : s'applique aussi à l'annotation sélectionnée.
-function applyToSelection(mutate) {
-  const s = textEdit?.shape ?? state.selected;
-  if (!s) return;
-  const before = snapshot();
-  const prev = JSON.stringify(s);
-  mutate(s);
-  if (textEdit) {
-    styleTextEditor();
-    positionTextEditor();
-  } else if (JSON.stringify(s) !== prev) {
-    commit(before);
+function propValues(c) {
+  const values = { ...(c.shape ?? state.styles[c.type]) };
+  if (c.type === 'step') values.number = c.shape ? c.shape.n : nextStepNumber();
+  return values;
+}
+
+function renderPropsBar() {
+  const c = propsContext();
+  const key = `${c.type ?? state.tool}:${c.shape?.id ?? 'outil'}`;
+  if (key !== propsKey) {
+    propsKey = key;
+    buildPropsBar(c);
   }
-  requestRender();
+  syncPropsBar(c);
 }
 
-function setColor(color) {
-  state.color = color;
-  $('#custom-color').value = color;
-  renderProps();
-  applyToSelection((s) => {
-    if (Shapes.hasColor(s)) s.color = color;
-  });
+function iconEl(id) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#${id}`);
+  svg.append(use);
+  return svg;
 }
 
-function setSize(index) {
-  state.sizeIndex = index;
-  renderProps();
-  applyToSelection((s) => Shapes.applySize(s, index, state.unit));
+function buildPropsBar(c) {
+  closeColorPopover();
+  pendingEdit = null;
+  const title = $('#props-title');
+  const box = $('#props-controls');
+  title.replaceChildren();
+  box.replaceChildren();
+  propControls = [];
+
+  const [label, icon] = TOOL_LABELS[c.type ?? state.tool] ?? ['', 'i-select'];
+  title.append(iconEl(icon), label);
+  if (c.shape) {
+    const small = document.createElement('small');
+    small.textContent = 'sélection';
+    title.append(small);
+  }
+  $('#btn-reset-style').hidden = !c.type;
+
+  if (!c.type) {
+    const hint = document.createElement('span');
+    hint.className = 'props-empty';
+    hint.textContent = state.tool === 'crop'
+      ? 'Glissez sur l’image pour choisir la zone à conserver.'
+      : 'Sélectionnez une annotation pour modifier ses réglages.';
+    box.append(hint);
+    return;
+  }
+  for (const key of TOOL_PROPS[c.type]) {
+    const control = buildControl(key, CONTROLS[key]);
+    propControls.push(control);
+    box.append(control.el);
+  }
 }
 
-function buildToolbar() {
-  const swatches = $('#swatches');
-  for (const [color, label] of COLORS) {
+function syncPropsBar(c = propsContext()) {
+  if (!c.type) return;
+  const values = propValues(c);
+  for (const control of propControls) {
+    const def = CONTROLS[control.key];
+    control.el.hidden = def.when ? !def.when(values) : false;
+    control.sync(values[control.key]);
+  }
+}
+
+// Après un clic dans la barre, rend la main au texte en cours d'écriture.
+function refocusText() {
+  if (textEdit) textEditor.focus();
+}
+
+function colorName(value) {
+  return PALETTE.find(([c]) => c.toLowerCase() === value.toLowerCase())?.[1] ?? value.toUpperCase();
+}
+
+function buildControl(key, def) {
+  const el = document.createElement('div');
+  el.className = 'prop';
+
+  // En-tête : libellé à gauche, valeur courante à droite
+  const head = () => {
+    const row = document.createElement('div');
+    row.className = 'prop-head';
+    const label = document.createElement('span');
+    label.className = 'prop-label';
+    label.textContent = def.label;
+    const value = document.createElement('span');
+    value.className = 'prop-value';
+    row.append(label, value);
+    el.append(row);
+    return value;
+  };
+  const inlineLabel = () => {
+    el.classList.add('row');
+    const label = document.createElement('span');
+    label.className = 'prop-label';
+    label.textContent = def.label;
+    el.append(label);
+  };
+
+  switch (def.type) {
+    case 'swatches': {
+      const value = head();
+      const row = document.createElement('div');
+      row.className = 'swatches';
+      row.setAttribute('role', 'radiogroup');
+      row.setAttribute('aria-label', def.label);
+      for (const [color, name] of COLORS) {
+        const b = document.createElement('button');
+        b.className = 'swatch';
+        b.dataset.color = color;
+        b.style.setProperty('--c', color);
+        b.setAttribute('role', 'radio');
+        b.setAttribute('aria-label', name);
+        b.title = name;
+        b.addEventListener('click', () => {
+          setProp(key, color);
+          refocusText();
+        });
+        row.append(b);
+      }
+      const custom = document.createElement('label');
+      custom.className = 'custom-color';
+      custom.title = 'Couleur personnalisée';
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.setAttribute('aria-label', 'Couleur personnalisée');
+      input.addEventListener('input', () => setProp(key, input.value, { final: false }));
+      input.addEventListener('change', () => setProp(key, input.value));
+      custom.append(input);
+      row.append(custom);
+      el.append(row);
+      return {
+        key,
+        el,
+        sync(v) {
+          let known = false;
+          for (const b of row.querySelectorAll('.swatch')) {
+            const on = b.dataset.color.toLowerCase() === v.toLowerCase();
+            known ||= on;
+            b.setAttribute('aria-checked', String(on));
+          }
+          custom.setAttribute('aria-checked', String(!known));
+          custom.style.setProperty('--c', v);
+          value.textContent = colorName(v);
+          if (document.activeElement !== input) input.value = v;
+        },
+      };
+    }
+
+    case 'range': {
+      const value = head();
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'range', min: def.min, max: def.max, step: 1 });
+      input.setAttribute('aria-label', def.label);
+      input.addEventListener('input', () => setProp(key, Number(input.value), { final: false }));
+      input.addEventListener('change', () => setProp(key, Number(input.value)));
+      el.append(input);
+      return {
+        key,
+        el,
+        sync(v) {
+          input.value = v;
+          value.textContent = `${v}${def.suffix ?? ''}`;
+        },
+      };
+    }
+
+    case 'number': {
+      inlineLabel();
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'number', min: def.min, max: def.max, step: def.step ?? 1 });
+      input.setAttribute('aria-label', def.label);
+      const read = () => {
+        const v = Number(input.value);
+        return Number.isFinite(v) && input.value !== '' ? Math.min(def.max, Math.max(def.min, v)) : null;
+      };
+      input.addEventListener('input', () => {
+        const v = read();
+        if (v != null) setProp(key, v, { final: false });
+      });
+      input.addEventListener('change', () => {
+        const v = read();
+        if (v != null) setProp(key, v);
+        else syncPropsBar();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault(); // sinon la touche arrive dans le texte en cours d'écriture
+          input.blur();
+          refocusText();
+        }
+      });
+      el.append(input);
+      return {
+        key,
+        el,
+        sync(v) {
+          if (document.activeElement !== input) input.value = v;
+        },
+      };
+    }
+
+    case 'select': {
+      head();
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', def.label);
+      for (const [value, text] of def.options) {
+        const option = new Option(text, value);
+        if (key === 'fontFamily') option.style.fontFamily = Shapes.fontCss(value);
+        select.append(option);
+      }
+      select.addEventListener('change', () => {
+        setProp(key, select.value);
+        refocusText();
+      });
+      el.append(select);
+      return {
+        key,
+        el,
+        sync(v) {
+          select.value = v;
+          if (key === 'fontFamily') select.style.fontFamily = Shapes.fontCss(v);
+        },
+      };
+    }
+
+    case 'segmented': {
+      const value = head();
+      const group = document.createElement('div');
+      group.className = 'seg';
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', def.label);
+      for (const [option, icon, text] of def.options) {
+        const b = document.createElement('button');
+        b.dataset.value = option;
+        b.title = text;
+        b.setAttribute('aria-label', text);
+        b.append(iconEl(icon));
+        b.addEventListener('click', () => {
+          setProp(key, option);
+          refocusText();
+        });
+        group.append(b);
+      }
+      el.append(group);
+      return {
+        key,
+        el,
+        sync(v) {
+          for (const b of group.children) b.setAttribute('aria-pressed', String(b.dataset.value === v));
+          value.textContent = def.options.find(([option]) => option === v)?.[2] ?? '';
+        },
+      };
+    }
+
+    case 'toggle': {
+      el.classList.add('compact');
+      const b = document.createElement('button');
+      b.className = def.text ? 'toggle with-text' : 'toggle';
+      b.title = def.label;
+      b.setAttribute('aria-label', def.label);
+      b.append(iconEl(def.icon));
+      if (def.text) b.append(def.text);
+      let current = false;
+      b.addEventListener('click', () => {
+        setProp(key, !current);
+        refocusText();
+      });
+      el.append(b);
+      return {
+        key,
+        el,
+        sync(v) {
+          current = Boolean(v);
+          b.setAttribute('aria-pressed', String(current));
+        },
+      };
+    }
+
+    case 'color': {
+      inlineLabel();
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.setAttribute('aria-haspopup', 'dialog');
+      chip.setAttribute('aria-expanded', 'false');
+      const dot = document.createElement('span');
+      const text = document.createElement('span');
+      chip.append(dot, text);
+      let current = null;
+      chip.addEventListener('click', () => openColorPopover(chip, key, def, current));
+      el.append(chip);
+      return {
+        key,
+        el,
+        sync(v) {
+          current = v;
+          dot.className = v ? 'chip-dot' : 'swatch-none';
+          dot.style.setProperty('--c', v ?? 'transparent');
+          text.textContent = v ? colorName(v) : 'Aucun';
+          chip.setAttribute('aria-label', `${def.label} : ${text.textContent}`);
+        },
+      };
+    }
+  }
+  return { key, el, sync() {} };
+}
+
+function setProp(key, value, { final = true } = {}) {
+  const c = propsContext();
+  if (!c.type) return;
+
+  if (key === 'number') {
+    if (!c.shape) {
+      state.nextStep = value;
+      syncPropsBar(c);
+      return;
+    }
+  } else {
+    state.styles[c.type][key] = value;
+    saveStyles();
+  }
+
+  if (c.shape) {
+    pendingEdit ??= { before: snapshot(), prev: JSON.stringify(c.shape) };
+    if (key === 'number') c.shape.n = value;
+    else c.shape[key] = value;
+    if (textEdit) styleTextEditor();
+    if (final) {
+      // pendant l'écriture, la validation du texte enregistre déjà ce pas d'annulation
+      if (!textEdit && JSON.stringify(c.shape) !== pendingEdit.prev) commit(pendingEdit.before);
+      pendingEdit = null;
+    }
+    requestRender();
+  }
+  syncPropsBar(c);
+}
+
+function resetStyle() {
+  const c = propsContext();
+  if (!c.type) return;
+  state.styles[c.type] = structuredClone(Shapes.DEFAULTS[c.type]);
+  saveStyles();
+  if (c.shape) {
+    const before = snapshot();
+    Object.assign(c.shape, structuredClone(Shapes.DEFAULTS[c.type]));
+    if (textEdit) styleTextEditor();
+    else commit(before);
+    requestRender();
+  }
+  syncPropsBar(c);
+  toast('Réglages par défaut rétablis');
+}
+
+function openColorPopover(anchor, key, def, value) {
+  const pop = $('#color-popover');
+  if (popover?.anchor === anchor) {
+    closeColorPopover();
+    return;
+  }
+  closeColorPopover();
+  popover = { anchor, key };
+  $('#popover-none').hidden = !def.none;
+  for (const b of $('#popover-swatches').children) {
+    b.setAttribute('aria-checked', String(Boolean(value) && b.dataset.color.toLowerCase() === value.toLowerCase()));
+  }
+  $('#popover-custom').value = value ?? '#ffffff';
+  anchor.setAttribute('aria-expanded', 'true');
+  pop.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+  pop.style.top = `${r.bottom + 6}px`;
+}
+
+function closeColorPopover() {
+  if (!popover) return;
+  popover.anchor.setAttribute('aria-expanded', 'false');
+  popover = null;
+  $('#color-popover').hidden = true;
+}
+
+function buildColorPopover() {
+  const grid = $('#popover-swatches');
+  for (const [color, name] of PALETTE) {
     const b = document.createElement('button');
     b.className = 'swatch';
     b.dataset.color = color;
     b.style.setProperty('--c', color);
-    b.setAttribute('role', 'radio');
-    b.setAttribute('aria-label', label);
-    b.addEventListener('click', () => setColor(color));
-    swatches.append(b);
+    b.setAttribute('aria-label', name);
+    b.addEventListener('click', () => {
+      setProp(popover.key, color);
+      closeColorPopover();
+      refocusText();
+    });
+    grid.append(b);
   }
-  const sizes = $('#sizes');
-  [5, 8, 11, 15].forEach((dot, i) => {
-    const b = document.createElement('button');
-    b.className = 'size';
-    b.dataset.size = String(i);
-    b.dataset.tip = `Taille : ${SIZE_LABELS[i]} (${i + 1})`;
-    b.setAttribute('role', 'radio');
-    b.setAttribute('aria-label', SIZE_LABELS[i]);
-    const span = document.createElement('span');
-    span.style.width = span.style.height = `${dot}px`;
-    b.append(span);
-    b.addEventListener('click', () => setSize(i));
-    sizes.append(b);
+  $('#popover-none').addEventListener('click', () => {
+    setProp(popover.key, null);
+    closeColorPopover();
+    refocusText();
   });
-  $('#custom-color').addEventListener('input', (e) => setColor(e.target.value));
+  const custom = $('#popover-custom');
+  custom.addEventListener('input', () => popover && setProp(popover.key, custom.value, { final: false }));
+  custom.addEventListener('change', () => popover && setProp(popover.key, custom.value));
+  document.addEventListener('pointerdown', (e) => {
+    if (popover && !e.target.closest('#color-popover') && e.target.closest('.chip') !== popover.anchor) closeColorPopover();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && popover) {
+      const anchor = popover.anchor;
+      closeColorPopover();
+      anchor.focus();
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  $('#btn-reset-style').addEventListener('click', () => {
+    resetStyle();
+    refocusText();
+  });
+}
+
+function buildToolbar() {
+  buildColorPopover();
 
   $$('.tool').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
   $('#btn-undo').addEventListener('click', undo);
@@ -943,7 +1444,9 @@ function toast(message) {
 // ------------------------------------------------------------------ clavier
 
 document.addEventListener('keydown', (e) => {
-  if (e.target.closest('input, textarea')) return;
+  // les curseurs de la barre de propriétés laissent passer les raccourcis, sauf les flèches
+  if (e.target.closest('textarea, select, input:not([type="range"])')) return;
+  if (e.target.matches('input[type="range"]') && e.key.startsWith('Arrow')) return;
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
 
@@ -993,10 +1496,6 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     const step = (e.shiftKey ? 10 : 1) * state.unit;
     nudgeSelected(arrows[0] * step, arrows[1] * step);
-    return;
-  }
-  if (/^[1-4]$/.test(e.key)) {
-    setSize(Number(e.key) - 1);
     return;
   }
   const tool = Object.entries(TOOLS).find(([, t]) => t.key === key)?.[0];
@@ -1079,7 +1578,6 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 buildToolbar();
-renderProps();
 setTool('arrow');
 updateButtons();
 

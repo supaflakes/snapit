@@ -33,6 +33,24 @@
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
       <symbol id="i-paste" viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1"/></symbol>
       <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+      <symbol id="i-head-end" viewBox="0 0 24 24"><path d="M4 12h15M14 7l5 5-5 5"/></symbol>
+      <symbol id="i-head-start" viewBox="0 0 24 24"><path d="M20 12H5M10 7l-5 5 5 5"/></symbol>
+      <symbol id="i-head-both" viewBox="0 0 24 24"><path d="M5 12h14M9 8l-4 4 4 4M15 8l4 4-4 4"/></symbol>
+      <symbol id="i-head-none" viewBox="0 0 24 24"><path d="M4 12h16"/></symbol>
+      <symbol id="i-hs-filled" viewBox="0 0 24 24"><path d="M3 12h9"/><path d="M12 6.5 20 12l-8 5.5z" fill="currentColor"/></symbol>
+      <symbol id="i-hs-open" viewBox="0 0 24 24"><path d="M3 12h16M13.5 6.5 19 12l-5.5 5.5"/></symbol>
+      <symbol id="i-hs-dot" viewBox="0 0 24 24"><path d="M3 12h12"/><circle cx="17" cy="12" r="3.2" fill="currentColor"/></symbol>
+      <symbol id="i-taper" viewBox="0 0 24 24"><path d="M3 12.6 14.5 10.8V6.5L21 12l-6.5 5.5v-4.3z" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-dash-solid" viewBox="0 0 24 24"><path d="M3 12h18"/></symbol>
+      <symbol id="i-dash-dashed" viewBox="0 0 24 24"><path d="M3 12h4.5M10 12h4.5M17 12h4"/></symbol>
+      <symbol id="i-dash-dotted" viewBox="0 0 24 24"><path d="M4 12h.01M8 12h.01M12 12h.01M16 12h.01M20 12h.01" stroke-width="3"/></symbol>
+      <symbol id="i-shadow" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="12" height="12" rx="2"/><path d="M19.5 8v9.5a2 2 0 0 1-2 2H8" stroke-width="3" opacity=".45"/></symbol>
+      <symbol id="i-step-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+      <symbol id="i-step-square" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4"/></symbol>
+      <symbol id="i-blur-soft" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" opacity=".3"/><circle cx="12" cy="12" r="5.5" opacity=".6"/><circle cx="12" cy="12" r="2.5"/></symbol>
+      <symbol id="i-bold" viewBox="0 0 24 24"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" stroke-width="2.4"/></symbol>
+      <symbol id="i-italic" viewBox="0 0 24 24"><path d="M10 5h8M6 19h8M14 5l-4 14"/></symbol>
+      <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"/><path d="M3.5 3.5v5h5"/></symbol>
       <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M6 12h12M12 6v12"/></symbol>
     </defs>
@@ -72,17 +90,6 @@
       <button class="btn tool" data-tool="crop" data-tip="Rogner (C)" aria-label="Rogner"><svg class="icon"><use href="#i-crop"/></svg></button>
     </div>
 
-    <div class="divider"></div>
-
-    <div class="group props needs-image">
-      <div class="swatches" id="swatches" role="radiogroup" aria-label="Couleur"></div>
-      <label class="custom-color" data-tip="Autre couleur">
-        <input type="color" id="custom-color" value="#e5484d" aria-label="Autre couleur">
-      </label>
-      <div class="divider small"></div>
-      <div class="sizes" id="sizes" role="radiogroup" aria-label="Taille"></div>
-    </div>
-
     <div class="spacer"></div>
 
     <div class="group needs-image">
@@ -99,6 +106,15 @@
     </div>
   </header>
 
+  <div class="popover" id="color-popover" role="dialog" aria-label="Choisir une couleur" hidden>
+    <div class="popover-swatches" id="popover-swatches"></div>
+    <div class="popover-row">
+      <button class="none-btn" id="popover-none" type="button"><span class="swatch-none"></span>Aucun</button>
+      <label class="custom-btn"><span class="custom-color"></span>Personnalisée<input type="color" id="popover-custom"></label>
+    </div>
+  </div>
+
+  <div class="workspace">
   <main id="stage">
     <div id="canvas-wrap">
       <canvas id="canvas"></canvas>
@@ -121,6 +137,17 @@
 
     <div id="drop-hint" hidden>Déposez l'image pour l'ouvrir</div>
   </main>
+
+  <aside class="panel" id="propsbar" aria-label="Propriétés de l'outil">
+    <div class="panel-head">
+      <div class="props-title" id="props-title"></div>
+      <button class="btn mini" id="btn-reset-style" title="Rétablir les réglages par défaut" aria-label="Rétablir les réglages par défaut" hidden>
+        <svg class="icon"><use href="#i-reset"/></svg>
+      </button>
+    </div>
+    <div class="props-controls" id="props-controls"></div>
+  </aside>
+  </div>
 
   <footer class="statusbar">
     <span id="status-size"></span>

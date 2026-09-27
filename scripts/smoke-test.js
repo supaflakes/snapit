@@ -125,6 +125,21 @@ app.whenReady().then(async () => {
       const afterRedo = await region.webContents.executeJavaScript('state.shapes.length');
       check('Ctrl+Y rétablit', afterRedo === 6);
 
+      // Réglages : modifier une annotation sélectionnée, puis annuler
+      const props = await region.webContents.executeJavaScript(`(() => {
+        const arrow = state.shapes.find((s) => s.type === 'arrow');
+        select(arrow);
+        setProp('heads', 'both');
+        setProp('outline', '#ffffff');
+        const changed = [arrow.heads, arrow.outline, document.querySelectorAll('#props-controls .prop').length];
+        undo();
+        const restored = state.shapes.find((s) => s.type === 'arrow');
+        return [...changed, restored.heads, restored.outline];
+      })()`);
+      check('réglages appliqués à l’annotation sélectionnée', props[0] === 'both' && props[1] === '#ffffff' && props[2] > 5, props.join(', '));
+      check('Ctrl+Z annule un changement de réglage', props[4] === null, `outline=${props[4]}`);
+      await key(region, 'y', ['control']);
+
       await key(region, 'c', ['control']);
       await wait(500);
       const items = await clipboard.read();
