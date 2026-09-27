@@ -1,4 +1,4 @@
-// Assistant clavier de Snapit : intercepte les raccourcis de capture (notamment Impr. écran)
+// Assistant clavier de Snapit : intercepte les raccourcis de capture (Impr. écran, Win+Maj+S…)
 // avant l'Outil Capture de Windows, grâce à un hook clavier bas niveau.
 // Il n'enregistre ni ne transmet aucune autre frappe : seules les combinaisons demandées
 // par Snapit sont reconnues, bloquées et signalées sur la sortie standard.
@@ -36,6 +36,13 @@ static class KeyHook
     static extern short GetAsyncKeyState(int vk);
     [DllImport("kernel32.dll")]
     static extern IntPtr GetModuleHandle(string name);
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+
+    // Touche virtuelle non attribuée : envoyée après une combinaison bloquée avec Win ou Alt,
+    // pour que le relâchement de Win n'ouvre pas le menu Démarrer (ni Alt la barre de menus).
+    const byte VK_MASK = 0xE8;
+    const uint KEYEVENTF_KEYUP = 0x0002;
 
     static readonly HookProc Proc = OnKey; // référence conservée : le ramasse-miettes ne doit pas la libérer
     static IntPtr hook;
@@ -101,6 +108,11 @@ static class KeyHook
                     if (combo.Value[1] == vk && combo.Value[0] == mods)
                     {
                         swallowUp.Add(vk);
+                        if ((mods & (2 | 8)) != 0)
+                        {
+                            keybd_event(VK_MASK, 0, 0, UIntPtr.Zero);
+                            keybd_event(VK_MASK, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                        }
                         Send(combo.Key);
                         return (IntPtr)1; // la touche n'atteint ni Windows ni l'Outil Capture
                     }

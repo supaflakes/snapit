@@ -34,6 +34,10 @@ un hook clavier bas niveau (`src/native/keyhook.cs`) qui ne reconnaît que les c
 Il est compilé au premier lancement avec le compilateur C# fourni avec Windows (.NET Framework) et se ferme avec Snapit.
 Aucun réglage de Windows n'est modifié : l'Outil Capture reprend la main dès que Snapit est fermé.
 
+Beaucoup de claviers (ou leur logiciel) n'envoient pas vraiment Impr. écran mais `Win+Maj+S`, le raccourci de
+l'Outil Capture. Snapit intercepte donc aussi `Win+Maj+S` et le redirige vers la capture de zone ; une touche neutre
+est envoyée pour que le relâchement de `Win` n'ouvre pas le menu Démarrer.
+
 ## Annoter
 
 | Touche | Outil |

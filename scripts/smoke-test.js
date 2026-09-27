@@ -53,6 +53,44 @@ function pressPrintScreen() {
   execFileSync('powershell', ['-NoProfile', '-Command', script]);
 }
 
+// Simule la macro de nombreux claviers pour Impr. écran : Win+Maj+S en quelques millisecondes.
+// Renvoie les titres des fenêtres passées au premier plan juste après (pour repérer le menu Démarrer)
+// et le nombre de processus de l'Outil Capture avant / après.
+function pressWinShiftS() {
+  const script = [
+    'Add-Type @"',
+    'using System; using System.Text; using System.Runtime.InteropServices;',
+    'public static class SmokeKeys {',
+    '  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);',
+    '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+    '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);',
+    '  public static string Foreground() { var sb = new StringBuilder(256); GetWindowText(GetForegroundWindow(), sb, 256); return sb.ToString(); }',
+    '}',
+    '"@',
+    '$before = @(Get-Process ScreenClippingHost -ErrorAction SilentlyContinue).Count',
+    '[SmokeKeys]::keybd_event(0x5B, 0x5B, 1, [UIntPtr]::Zero)',
+    '[SmokeKeys]::keybd_event(0xA0, 0x2A, 0, [UIntPtr]::Zero)',
+    '[SmokeKeys]::keybd_event(0x53, 0x1F, 0, [UIntPtr]::Zero)',
+    'Start-Sleep -Milliseconds 70',
+    '[SmokeKeys]::keybd_event(0x53, 0x1F, 2, [UIntPtr]::Zero)',
+    '[SmokeKeys]::keybd_event(0xA0, 0x2A, 2, [UIntPtr]::Zero)',
+    '[SmokeKeys]::keybd_event(0x5B, 0x5B, 3, [UIntPtr]::Zero)',
+    '$titles = @(); for ($i = 0; $i -lt 16; $i++) { Start-Sleep -Milliseconds 60; $titles += [SmokeKeys]::Foreground() }',
+    '$after = @(Get-Process ScreenClippingHost -ErrorAction SilentlyContinue).Count',
+    '"$before|$after|" + (($titles | Select-Object -Unique) -join ";")',
+  ].join('\n');
+  const [before, after, titles] = execFileSync('powershell', ['-NoProfile', '-Command', script]).toString().trim().split('|');
+  return { snippingBefore: Number(before), snippingAfter: Number(after), titles: titles.split(';').filter(Boolean) };
+}
+
+async function closeOverlay() {
+  const isOverlay = (w) => w.isVisible() && w.webContents.getURL().includes('/overlay/');
+  const visible = BrowserWindow.getAllWindows().find(isOverlay);
+  if (visible) await key(visible, 'Escape');
+  for (let i = 0; i < 20 && BrowserWindow.getAllWindows().some(isOverlay); i++) await wait(100);
+  await wait(500);
+}
+
 async function key(win, keyCode, modifiers = []) {
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
   win.webContents.sendInputEvent({ type: 'char', keyCode, modifiers });
@@ -81,10 +119,19 @@ app.whenReady().then(async () => {
         overlayShown = BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/'));
       }
       check('Impr. écran ouvre la sélection Snapit', overlayShown);
-      const visible = BrowserWindow.getAllWindows().find((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/'));
-      if (visible) await key(visible, 'Escape');
-      for (let i = 0; i < 20 && BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/')); i++) await wait(100);
-      await wait(500);
+      await closeOverlay();
+
+      const macro = pressWinShiftS();
+      let macroOverlay = false;
+      for (let i = 0; i < 40 && !macroOverlay; i++) {
+        await wait(100);
+        macroOverlay = BrowserWindow.getAllWindows().some((w) => w.isVisible() && w.webContents.getURL().includes('/overlay/'));
+      }
+      check('Win+Maj+S (macro « Impr. écran » du clavier) ouvre la sélection Snapit', macroOverlay);
+      check('l’Outil Capture ne s’ouvre pas', macro.snippingAfter <= macro.snippingBefore, `${macro.snippingBefore} → ${macro.snippingAfter}`);
+      const startMenu = macro.titles.some((title) => /^(Démarrer|Start|Rechercher|Search)$/.test(title));
+      check('le menu Démarrer ne s’ouvre pas', !startMenu, macro.titles.join(' / ') || '(aucun titre)');
+      await closeOverlay();
     }
 
     // 0 bis. Paramètres : fenêtre, langue répercutée dans l'éditeur

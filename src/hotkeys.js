@@ -11,8 +11,38 @@ const path = require('path');
 
 const MODIFIERS = { Ctrl: 1, Control: 1, CommandOrControl: 1, CmdOrCtrl: 1, Alt: 2, Shift: 4, Super: 8, Meta: 8 };
 const MODIFIER_NAMES = [[1, 'Ctrl'], [2, 'Alt'], [4, 'Shift'], [8, 'Super']];
+const WIN = 8;
 const VK_SNAPSHOT = 0x2c;
 const RECORD_PREFIX = 'rec';
+
+// Win+Maj+S : raccourci de l'Outil Capture. Beaucoup de claviers l'envoient quand on appuie sur Impr. écran,
+// il est donc redirigé vers la capture de zone quand Snapit remplace l'Outil Capture.
+const SNIPPING_SHORTCUT = { mods: 4 | WIN, vk: 0x53 };
+
+const NAMED_KEYS = {
+  PrintScreen: VK_SNAPSHOT,
+  Space: 0x20,
+  PageUp: 0x21,
+  PageDown: 0x22,
+  End: 0x23,
+  Home: 0x24,
+  Left: 0x25,
+  Up: 0x26,
+  Right: 0x27,
+  Down: 0x28,
+  Insert: 0x2d,
+  Delete: 0x2e,
+  Pause: 0x13,
+  Scrolllock: 0x91,
+};
+
+// Code de touche virtuelle Windows d'une touche d'accélérateur Electron.
+function virtualKey(key) {
+  if (/^[A-Z0-9]$/.test(key)) return key.charCodeAt(0);
+  const f = /^F([1-9]|1[0-9]|2[0-4])$/.exec(key);
+  if (f) return 0x6f + Number(f[1]);
+  return NAMED_KEYS[key] ?? null;
+}
 
 function parseAccelerator(accelerator) {
   const parts = accelerator.split('+');
@@ -173,8 +203,11 @@ class Hotkeys {
         status[action] = 'conflict';
         continue;
       }
-      if (parsed.key === 'PrintScreen' && override && this.hookReady) {
-        combos.push(`${action}:${parsed.mods}:${VK_SNAPSHOT}`);
+      // Impr. écran et les combinaisons avec Win (réservées par Windows) passent par l'assistant
+      const vk = virtualKey(parsed.key);
+      const viaHook = parsed.key === 'PrintScreen' || parsed.mods & WIN;
+      if (viaHook && vk && override && this.hookReady) {
+        combos.push(`${action}:${parsed.mods}:${vk}`);
         status[action] = 'hook';
         continue;
       }
@@ -186,6 +219,8 @@ class Hotkeys {
       }
       status[action] = ok ? 'ok' : 'conflict';
     }
+    const snipping = `:${SNIPPING_SHORTCUT.mods}:${SNIPPING_SHORTCUT.vk}`;
+    if (override && this.hookReady && !combos.some((c) => c.endsWith(snipping))) combos.push(`region${snipping}`);
     this.helper?.set(combos);
     this.status = status;
     this.onStatus?.(this.getStatus());
@@ -198,7 +233,9 @@ class Hotkeys {
     this.recording = true;
     globalShortcut.unregisterAll();
     const combos = [];
-    for (let mods = 0; mods < 16; mods++) combos.push(`${RECORD_PREFIX}${mods}:${mods}:${VK_SNAPSHOT}`);
+    for (let mods = 0; mods < 16; mods++) combos.push(`${RECORD_PREFIX}${mods}-${VK_SNAPSHOT}:${mods}:${VK_SNAPSHOT}`);
+    const { mods, vk } = SNIPPING_SHORTCUT;
+    combos.push(`${RECORD_PREFIX}${mods}-${vk}:${mods}:${vk}`);
     this.helper?.set(this.hookReady ? combos : []);
   }
 
@@ -210,7 +247,9 @@ class Hotkeys {
 
   handle(id) {
     if (id.startsWith(RECORD_PREFIX)) {
-      if (this.recording) this.onRecord(acceleratorFrom(Number(id.slice(RECORD_PREFIX.length)), 'PrintScreen'));
+      const [mods, vk] = id.slice(RECORD_PREFIX.length).split('-').map(Number);
+      const key = vk === VK_SNAPSHOT ? 'PrintScreen' : String.fromCharCode(vk);
+      if (this.recording) this.onRecord(acceleratorFrom(mods, key));
       return;
     }
     this.onTrigger(id);
