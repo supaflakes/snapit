@@ -1,0 +1,42 @@
+{
+  "name": "snapit",
+  "productName": "Snapit",
+  "version": "0.1.0",
+  "description": "Capture d'écran et annotations pour Windows",
+  "main": "src/main.js",
+  "private": true,
+  "author": "Snapit",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/generate-icons.js",
+    "smoke": "electron scripts/smoke-test.js",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.snapit.app",
+    "productName": "Snapit",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
+  },
+  "allowScripts": {
+    "electron@44.4.5": true
+  }
+}

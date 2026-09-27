@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snapit</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-capture" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-select" viewBox="0 0 24 24"><path d="M5 4.5 11 20l2.2-6.8L20 11z"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 19 19 5M9.5 5H19v9.5"/></symbol>
+      <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="13" rx="1.5"/></symbol>
+      <symbol id="i-ellipse" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"/></symbol>
+      <symbol id="i-line" viewBox="0 0 24 24"><path d="M5 19 19 5"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7.5 18.5 3.5 20l1.5-4z"/></symbol>
+      <symbol id="i-marker" viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 7V5h14v2M12 5v14M9 19h6"/></symbol>
+      <symbol id="i-step" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M10.5 9.5 12.5 8v8"/></symbol>
+      <symbol id="i-blur" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M4 4h4v4H4zM12 4h4v4h-4zM8 8h4v4H8zM16 8h4v4h-4zM4 12h4v4H4zM12 12h4v4h-4zM8 16h4v4H8zM16 16h4v4h-4z"/></symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+      <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+      <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-paste" viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1"/></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M6 12h12M12 6v12"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="toolbar">
+    <div class="group capture-group">
+      <button class="btn primary" id="btn-capture" data-tip="Capturer une zone (Ctrl+N)">
+        <svg class="icon"><use href="#i-capture"/></svg><span>Capturer</span>
+      </button>
+      <button class="btn primary chevron" id="btn-capture-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Autres modes de capture">
+        <svg class="icon"><use href="#i-chevron"/></svg>
+      </button>
+      <div class="menu" id="capture-menu" role="menu" hidden>
+        <button role="menuitem" data-action="capture-region"><svg class="icon"><use href="#i-capture"/></svg>Capturer une zone<kbd data-shortcut="region"></kbd></button>
+        <button role="menuitem" data-action="capture-fullscreen"><svg class="icon"><use href="#i-monitor"/></svg>Capturer l'écran entier<kbd data-shortcut="fullscreen"></kbd></button>
+        <button role="menuitem" data-action="capture-delay"><svg class="icon"><use href="#i-timer"/></svg>Capture différée (3 s)</button>
+        <hr>
+        <button role="menuitem" data-action="open"><svg class="icon"><use href="#i-folder"/></svg>Ouvrir une image…<kbd>Ctrl+O</kbd></button>
+        <button role="menuitem" data-action="paste"><svg class="icon"><use href="#i-paste"/></svg>Coller une image<kbd>Ctrl+V</kbd></button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="group tools needs-image" role="toolbar" aria-label="Outils">
+      <button class="btn tool" data-tool="select" data-tip="Sélection (V)" aria-label="Sélection"><svg class="icon"><use href="#i-select"/></svg></button>
+      <button class="btn tool" data-tool="arrow" data-tip="Flèche (A)" aria-label="Flèche"><svg class="icon"><use href="#i-arrow"/></svg></button>
+      <button class="btn tool" data-tool="rect" data-tip="Rectangle (R)" aria-label="Rectangle"><svg class="icon"><use href="#i-rect"/></svg></button>
+      <button class="btn tool" data-tool="ellipse" data-tip="Ellipse (E)" aria-label="Ellipse"><svg class="icon"><use href="#i-ellipse"/></svg></button>
+      <button class="btn tool" data-tool="line" data-tip="Ligne (L)" aria-label="Ligne"><svg class="icon"><use href="#i-line"/></svg></button>
+      <button class="btn tool" data-tool="pen" data-tip="Crayon (P)" aria-label="Crayon"><svg class="icon"><use href="#i-pen"/></svg></button>
+      <button class="btn tool" data-tool="marker" data-tip="Surligneur (H)" aria-label="Surligneur"><svg class="icon"><use href="#i-marker"/></svg></button>
+      <button class="btn tool" data-tool="text" data-tip="Texte (T)" aria-label="Texte"><svg class="icon"><use href="#i-text"/></svg></button>
+      <button class="btn tool" data-tool="step" data-tip="Étape numérotée (N)" aria-label="Étape numérotée"><svg class="icon"><use href="#i-step"/></svg></button>
+      <button class="btn tool" data-tool="blur" data-tip="Pixeliser (B)" aria-label="Pixeliser"><svg class="icon"><use href="#i-blur"/></svg></button>
+      <button class="btn tool" data-tool="crop" data-tip="Rogner (C)" aria-label="Rogner"><svg class="icon"><use href="#i-crop"/></svg></button>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="group props needs-image">
+      <div class="swatches" id="swatches" role="radiogroup" aria-label="Couleur"></div>
+      <label class="custom-color" data-tip="Autre couleur">
+        <input type="color" id="custom-color" value="#e5484d" aria-label="Autre couleur">
+      </label>
+      <div class="divider small"></div>
+      <div class="sizes" id="sizes" role="radiogroup" aria-label="Taille"></div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="group needs-image">
+      <button class="btn" id="btn-undo" data-tip="Annuler (Ctrl+Z)" aria-label="Annuler"><svg class="icon"><use href="#i-undo"/></svg></button>
+      <button class="btn" id="btn-redo" data-tip="Rétablir (Ctrl+Y)" aria-label="Rétablir"><svg class="icon"><use href="#i-redo"/></svg></button>
+      <button class="btn" id="btn-delete" data-tip="Supprimer l'annotation (Suppr)" aria-label="Supprimer l'annotation"><svg class="icon"><use href="#i-trash"/></svg></button>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="group needs-image">
+      <button class="btn labeled" id="btn-copy" data-tip="Copier l'image (Ctrl+C)"><svg class="icon"><use href="#i-copy"/></svg><span>Copier</span></button>
+      <button class="btn labeled" id="btn-save" data-tip="Enregistrer (Ctrl+S)"><svg class="icon"><use href="#i-save"/></svg><span>Enregistrer</span></button>
+    </div>
+  </header>
+
+  <main id="stage">
+    <div id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <textarea id="text-editor" spellcheck="false" wrap="off" hidden></textarea>
+    </div>
+
+    <section id="empty" aria-labelledby="empty-title">
+      <div class="empty-card">
+        <img src="../../assets/icon.png" alt="" width="64" height="64">
+        <h1 id="empty-title">Capturez, annotez, partagez</h1>
+        <p>Sélectionnez une zone de l'écran, puis ajoutez flèches, textes, étapes numérotées ou zones pixelisées.</p>
+        <div class="empty-actions">
+          <button class="btn primary big" data-action="capture-region"><svg class="icon"><use href="#i-capture"/></svg>Capturer une zone</button>
+          <button class="btn big" data-action="capture-fullscreen"><svg class="icon"><use href="#i-monitor"/></svg>Écran entier</button>
+          <button class="btn big" data-action="open"><svg class="icon"><use href="#i-folder"/></svg>Ouvrir une image</button>
+        </div>
+        <p class="empty-hint" id="empty-hint">Vous pouvez aussi coller une image (Ctrl+V) ou la glisser ici.</p>
+      </div>
+    </section>
+
+    <div id="drop-hint" hidden>Déposez l'image pour l'ouvrir</div>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status-size"></span>
+    <span id="status-hint" class="hint"></span>
+    <div class="zoom needs-image">
+      <button class="btn mini" id="btn-zoom-out" aria-label="Zoom arrière"><svg class="icon"><use href="#i-minus"/></svg></button>
+      <button class="zoom-label" id="zoom-label" data-tip="Taille réelle (Ctrl+1)">100 %</button>
+      <button class="btn mini" id="btn-zoom-in" aria-label="Zoom avant"><svg class="icon"><use href="#i-plus"/></svg></button>
+      <button class="btn mini" id="btn-zoom-fit" data-tip="Ajuster à la fenêtre (Ctrl+0)" aria-label="Ajuster à la fenêtre"><svg class="icon"><use href="#i-fit"/></svg></button>
+    </div>
+  </footer>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="file-input" accept="image/*" hidden>
+
+  <script src="shapes.js"></script>
+  <script src="editor.js"></script>
+</body>
+</html>
