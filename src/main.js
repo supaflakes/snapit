@@ -25,6 +25,10 @@ const { Hotkeys } = require('./hotkeys');
 const ASSETS = path.join(__dirname, '..', 'assets');
 const PRELOAD = path.join(__dirname, 'preload.js');
 
+// Lancé au démarrage de Windows, Snapit démarre discrètement dans la zone de notification.
+const HIDDEN_ARG = '--hidden';
+const LOGIN_ARGS = [HIDDEN_ARG];
+
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp' };
 
 let tray = null;
@@ -71,7 +75,8 @@ function appState() {
     status: hotkeys?.getStatus() ?? { shortcuts: {}, hookAvailable: false, hookFailed: false },
     version: app.getVersion(),
     isPackaged: app.isPackaged,
-    openAtLogin: app.isPackaged ? app.getLoginItemSettings().openAtLogin : false,
+    // Sous Windows, l'entrée de démarrage n'est reconnue qu'avec les mêmes arguments qu'à l'activation
+    openAtLogin: app.isPackaged ? app.getLoginItemSettings({ args: LOGIN_ARGS }).openAtLogin : false,
   };
 }
 
@@ -536,7 +541,7 @@ ipcMain.handle('settings:set', (_e, patch) => {
 });
 
 ipcMain.handle('settings:set-login', (_e, enabled) => {
-  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: ['--hidden'] });
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: LOGIN_ARGS });
   broadcast();
   return appState();
 });
@@ -629,7 +634,7 @@ app.whenReady().then(() => {
     screen.on(event, destroyOverlays);
   }
 
-  if (!process.argv.includes('--hidden')) createEditor();
+  if (!process.argv.includes(HIDDEN_ARG)) createEditor();
 });
 
 // L'application vit dans la zone de notification : fermer les fenêtres ne la quitte pas.
