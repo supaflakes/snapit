@@ -236,6 +236,12 @@ input[type="number"] {
   width: 76px;
 }
 
+.row-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
 .with-unit {
   display: flex;
   align-items: center;

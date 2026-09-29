@@ -26,6 +26,32 @@ Pendant la sélection : glisser pour choisir la zone, simple clic pour l'écran 
 `Échap` ou clic droit pour annuler. Une loupe affiche les pixels sous le curseur.
 Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %) sont gérés.
 
+Par défaut, chaque capture est **copiée dans le presse-papiers** et **enregistrée dans la bibliothèque**
+(voir ci-dessous) ; les deux se désactivent dans les paramètres.
+
+## Bibliothèque et galerie
+
+Comme dans Snagit, chaque capture est enregistrée automatiquement, annotations comprises, dans
+`Images\Snapit` (dossier modifiable dans les paramètres), puis mise à jour à chaque modification :
+plus besoin d'enregistrer, et fermer la fenêtre ne demande rien.
+
+```
+Images\Snapit\Capture 2026-09-29 à 14.03.22.png   l'image annotée, telle qu'exportée
+Images\Snapit\.snapit\                            (caché) image d'origine, annotations, miniatures
+```
+
+La **galerie**, en bas de l'éditeur, présente toutes les captures, de la plus récente à la plus ancienne :
+
+- un clic rouvre la capture avec ses annotations, toujours modifiables ;
+- une nouvelle capture s'ouvre dans la même fenêtre, la précédente reste dans la galerie
+  (sans galerie, chaque capture a sa fenêtre, comme avant) ;
+- `×` au survol ou `Suppr` supprime une capture (l'image annotée va dans la corbeille) ;
+- clic droit : ouvrir dans une nouvelle fenêtre, copier l'image, afficher dans l'Explorateur, supprimer ;
+- **Dossier** ouvre le dossier des captures ; le bouton à droite de la barre d'état masque ou affiche la galerie.
+
+Les images ouvertes (`Ctrl+O`), collées ou déposées ne vont pas dans la bibliothèque : elles gardent
+l'enregistrement classique (`Ctrl+S`).
+
 ### Impr. écran et l'Outil Capture de Windows
 
 Sous Windows 11, `Impr. écran` ouvre normalement l'Outil Capture. Tant que Snapit est ouvert (et que l'option
@@ -89,16 +115,19 @@ On peut aussi glisser-déposer une image dans la fenêtre.
 - **Raccourcis de capture** : cliquer sur un raccourci puis appuyer sur la combinaison voulue ; l'état de chaque
   raccourci est affiché (actif, prioritaire sur l'Outil Capture, ou déjà pris par une autre application).
 - **Utiliser Impr. écran pour Snapit** plutôt que l'Outil Capture de Windows.
-- **Délai** de la capture différée, **copie automatique** de chaque capture dans le presse-papiers.
-- **Dossier et format** d'enregistrement par défaut.
+- **Délai** de la capture différée, **copie automatique** de chaque capture dans le presse-papiers (activée par défaut).
+- **Bibliothèque de captures** : enregistrement automatique de chaque capture, dossier des captures,
+  affichage de la galerie en bas de l'éditeur (tous deux activés par défaut).
+- **Dossier et format** proposés par « Enregistrer » (`Ctrl+S`).
 
 Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 
 ## Développement
 
 - `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, capture plein écran,
-  sélection de zone simulée, annotations, réglages, annuler/rétablir, presse-papiers).
-  Affiche brièvement l'overlay de sélection.
+  sélection de zone simulée, annotations, réglages, annuler/rétablir, presse-papiers, bibliothèque et galerie).
+  Affiche brièvement l'overlay de sélection. Il utilise son propre profil et sa propre bibliothèque
+  (dans `%TEMP%\snapit-smoke`) : vos paramètres et vos captures ne sont pas touchés.
 - `npm run icons` : régénère les icônes de `assets/`.
 - `npm run dist` : construit l'installateur Windows dans `dist/`.
 - `F12` ouvre les outils de développement (hors version packagée).
@@ -111,6 +140,7 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 ```
 src/main.js            processus principal : zone de notification, capture, fenêtres, IPC
 src/settings.js        paramètres de l'application (settings.json)
+src/library.js         bibliothèque des captures (enregistrement automatique, galerie)
 src/hotkeys.js         raccourcis globaux et assistant clavier
 src/native/keyhook.cs  assistant clavier (hook bas niveau) pour Impr. écran
 src/i18n.js            traductions français / anglais, partagées par toutes les fenêtres
@@ -118,6 +148,7 @@ src/theme.css          couleurs des thèmes sombre et clair
 src/preload.js         pont IPC exposé aux pages (contextIsolation + sandbox)
 src/overlay/           sélection de zone plein écran (une fenêtre par écran)
 src/editor/shapes.js   modèle, rendu et géométrie des annotations
-src/editor/editor.js   interface de l'éditeur : outils, préréglages, historique, zoom, export
+src/editor/editor.js   interface de l'éditeur : outils, préréglages, historique, zoom, export,
+                       enregistrement automatique et galerie
 src/settings/          fenêtre des paramètres
 ```

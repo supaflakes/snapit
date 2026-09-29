@@ -1,17 +1,29 @@
 // Test de fumée de bout en bout : lance l'application, fait une capture plein écran,
 // une capture de zone (souris simulée dans l'overlay), dessine des annotations,
-// puis enregistre des images de contrôle.
+// vérifie la bibliothèque et la galerie, puis enregistre des images de contrôle.
 // Usage : npm run smoke   (dossier de sortie : SNAPIT_SMOKE_OUT ou %TEMP%\snapit-smoke)
 'use strict';
 
-const { app, BrowserWindow, clipboard, screen } = require('electron');
+const { app, BrowserWindow, clipboard, nativeImage, screen } = require('electron');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const snapit = require('../src/main.js');
 
 const OUT = process.env.SNAPIT_SMOKE_OUT || path.join(os.tmpdir(), 'snapit-smoke');
+
+// Profil et bibliothèque propres au test : les paramètres et les captures de l'utilisateur restent
+// intacts, et une instance de Snapit déjà ouverte ne capte pas le lancement (instance unique).
+const PROFILE = path.join(OUT, 'profil');
+const LIBRARY = path.join(OUT, 'bibliotheque');
+fs.rmSync(LIBRARY, { recursive: true, force: true });
+fs.mkdirSync(PROFILE, { recursive: true });
+fs.writeFileSync(path.join(PROFILE, 'settings.json'), JSON.stringify({ version: 2, libraryFolder: LIBRARY }));
+app.setPath('userData', PROFILE);
+
+const snapit = require('../src/main.js');
+const { SettingsStore } = require('../src/settings.js');
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 
@@ -98,12 +110,39 @@ async function key(win, keyCode, modifiers = []) {
   await wait(50);
 }
 
+async function clipboardImageSize() {
+  for (const item of await clipboard.read()) {
+    const type = item.types.find((t) => t.startsWith('image/'));
+    if (!type) continue;
+    const data = Buffer.from(await (await item.getType(type)).arrayBuffer());
+    return nativeImage.createFromBuffer(data).getSize();
+  }
+  return null;
+}
+
+// Attend qu'une condition (évaluée dans une fenêtre) soit vraie.
+async function until(win, expression, timeout = 4000) {
+  for (let t = 0; t < timeout; t += 100) {
+    if (await win.webContents.executeJavaScript(expression)) return true;
+    await wait(100);
+  }
+  return false;
+}
+
 app.whenReady().then(async () => {
   fs.mkdirSync(OUT, { recursive: true });
   try {
+    // Paramètres d'une version précédente : la copie automatique devient active par défaut
+    const legacy = path.join(OUT, 'settings-v1.json');
+    fs.writeFileSync(legacy, JSON.stringify({ copyAfterCapture: false, captureDelay: 5 }));
+    const migrated = new SettingsStore(legacy).get();
+    check('anciens paramètres : copie automatique activée', migrated.copyAfterCapture && migrated.captureDelay === 5);
+
     await wait(2000);
     const [home] = editorWindows();
     check("l'éditeur s'ouvre au démarrage", Boolean(home));
+    const library = snapit.getLibrary();
+    library.trash = async (file) => fs.rmSync(file); // pas de passage par la corbeille de l'utilisateur
     await savePage(home, '0-accueil.png');
 
     // 0. Impr. écran : l'assistant clavier doit la prendre avant l'Outil Capture de Windows
@@ -161,9 +200,21 @@ app.whenReady().then(async () => {
     await wait(1200);
     const full = await home.webContents.executeJavaScript('[document.body.classList.contains("has-image"), canvas.width, canvas.height]');
     check('capture plein écran chargée dans l’éditeur', full[0] && full[1] > 0, `${full[1]}×${full[2]}`);
+    const copied = await clipboardImageSize();
+    check('capture copiée dans le presse-papiers', copied?.width === full[1] && copied?.height === full[2], copied && `${copied.width}×${copied.height}`);
     await savePage(home, '1-plein-ecran.png');
 
-    // 2. Zone : sélection simulée dans l'overlay, doit ouvrir un nouvel éditeur
+    // Bibliothèque : capture enregistrée (image visible + données d'édition), affichée dans la galerie
+    const [fullItem] = await library.list();
+    const dataFile = (id, ext) => path.join(LIBRARY, '.snapit', `${id}${ext}`);
+    const stored = fullItem && ['.json', '.png', '.jpg'].every((ext) => fs.existsSync(dataFile(fullItem.id, ext)));
+    check('capture enregistrée dans la bibliothèque', stored && fs.existsSync(library.imagePath(fullItem.id)), fullItem?.name);
+    const fullId = fullItem?.id;
+    const shown = await until(home, `state.libraryId === ${JSON.stringify(fullId)} && document.querySelectorAll('.shot').length === 1 && document.querySelector('.shot-open[aria-current="true"]')?.parentElement.dataset.id === state.libraryId`);
+    check('la galerie affiche la capture, mise en évidence', shown);
+
+    // 2. Zone : sélection simulée dans l'overlay ; la capture remplace la précédente dans le même
+    // éditeur (galerie affichée : la précédente reste accessible d'un clic)
     const pending = snapit.startCapture('region');
     let overlay = null;
     for (let i = 0; i < 40 && !overlay; i++) {
@@ -190,8 +241,12 @@ app.whenReady().then(async () => {
     await pending;
     await wait(1500);
     const editors = editorWindows();
-    const region = editors.find((w) => w !== home);
-    check('la capture de zone ouvre un nouvel éditeur', Boolean(region), `${editors.length} éditeur(s)`);
+    const regionId = await home.webContents.executeJavaScript('state.libraryId');
+    const reused = editors.length === 1 && regionId && regionId !== fullId;
+    check('la capture de zone s’affiche dans le même éditeur', reused, `${editors.length} éditeur(s)`);
+    const galleryCount = await home.webContents.executeJavaScript('document.querySelectorAll(".shot").length');
+    check('la galerie contient les deux captures', galleryCount === 2, `${galleryCount} miniature(s)`);
+    const region = reused ? home : null;
 
     if (region) {
       const [w, h, scale] = await region.webContents.executeJavaScript('[canvas.width, canvas.height, state.scale]');
@@ -253,6 +308,50 @@ app.whenReady().then(async () => {
       fs.writeFileSync(path.join(OUT, '4-export.png'), Buffer.from(exported.split(',')[1], 'base64'));
       check('export PNG', exported.length > 1000, `${Math.round(exported.length / 1024)} Ko`);
       console.log(`échelle d'affichage : ${scale.toFixed(3)}`);
+
+      // Enregistrement automatique : annotations (modifiables) et image annotée mises à jour
+      const types = await region.webContents.executeJavaScript('state.shapes.map((s) => s.type).join(",")');
+      const readData = (id) => JSON.parse(fs.readFileSync(dataFile(id, '.json'), 'utf8'));
+      let saved = null;
+      for (let i = 0; i < 40 && saved?.shapes.length !== 6; i++) {
+        await wait(100);
+        saved = readData(regionId);
+      }
+      check('annotations enregistrées automatiquement', saved.shapes.map((s) => s.type).join(',') === types, `${saved.shapes.length} annotation(s)`);
+      const annotated = !fs.readFileSync(library.imagePath(regionId)).equals(fs.readFileSync(dataFile(regionId, '.png')));
+      check('image annotée enregistrée à côté de l’originale', annotated);
+      const regionItem = (await library.list()).find((i) => i.id === regionId);
+      const thumbSynced = await until(region, `document.querySelector('.shot[data-id="${regionId}"] img').src === ${JSON.stringify(regionItem.thumb)}`);
+      check('la miniature de la galerie suit les modifications', thumbSynced);
+      await savePage(region, '5-galerie.png');
+
+      // Galerie : rouvrir la capture précédente, puis revenir avec les annotations
+      const click = (id) => region.webContents.executeJavaScript(`document.querySelector('.shot[data-id="${id}"] .shot-open').click()`);
+      await click(fullId);
+      const back = await until(region, `state.libraryId === ${JSON.stringify(fullId)} && state.shapes.length === 0`);
+      check('clic dans la galerie : la capture précédente s’ouvre', back);
+      await click(regionId);
+      const restored = await until(region, `state.libraryId === ${JSON.stringify(regionId)} && state.shapes.map((s) => s.type).join(",") === ${JSON.stringify(types)}`);
+      check('la capture rouverte retrouve ses annotations', restored);
+
+      // Suppression depuis la galerie
+      await region.webContents.executeJavaScript(`deleteCapture(${JSON.stringify(fullId)})`);
+      const removed = await until(region, 'document.querySelectorAll(".shot").length === 1');
+      check('supprimer une capture la retire de la galerie et du dossier', removed && !fs.existsSync(dataFile(fullId, '.json')));
+
+      // Fermeture juste après une modification : enregistrée sans confirmation
+      await region.webContents.executeJavaScript(`(() => {
+        const before = snapshot();
+        state.shapes.push(Shapes.create('rect', { x: 10, y: 10 }, { ...state.styles.rect }));
+        Object.assign(state.shapes.at(-1), { w: 40, h: 30 });
+        commit(before);
+      })()`);
+      region.close();
+      await wait(800);
+      const final = readData(regionId);
+      check('fermer la fenêtre enregistre la dernière modification', final.shapes.length === 7 && region.isDestroyed(), `${final.shapes.length} annotation(s)`);
+      const leftovers = fs.readdirSync(path.join(LIBRARY, '.snapit')).filter((name) => name.endsWith('.tmp'));
+      check('aucun fichier temporaire laissé dans la bibliothèque', leftovers.length === 0, leftovers.join(', '));
     }
   } catch (err) {
     check('exécution sans erreur', false, err.stack);

@@ -92,6 +92,10 @@ function render(next) {
   setSwitch('#override', s.overrideSnippingTool);
   setSwitch('#copy-after', s.copyAfterCapture);
   if (document.activeElement !== $('#delay')) $('#delay').value = s.captureDelay;
+  setSwitch('#auto-save', s.autoSave);
+  setSwitch('#show-gallery', s.showGallery);
+  $('#library-path').textContent = state.libraryFolder;
+  $('#library-path').title = state.libraryFolder;
   $('#folder-path').textContent = s.saveFolder || t('settings.folderDefault');
   $('#folder-path').title = s.saveFolder;
   $('#override-unavailable').hidden = !(s.overrideSnippingTool && state.status.hookFailed);
@@ -196,6 +200,10 @@ $('#format').addEventListener('click', (e) => {
 $('#startup').addEventListener('click', async () => render(await api.setOpenAtLogin(!state.openAtLogin)));
 $('#override').addEventListener('click', () => update({ overrideSnippingTool: !state.settings.overrideSnippingTool }));
 $('#copy-after').addEventListener('click', () => update({ copyAfterCapture: !state.settings.copyAfterCapture }));
+$('#auto-save').addEventListener('click', () => update({ autoSave: !state.settings.autoSave }));
+$('#show-gallery').addEventListener('click', () => update({ showGallery: !state.settings.showGallery }));
+$('#open-library').addEventListener('click', () => api.openLibraryFolder());
+$('#choose-library').addEventListener('click', async () => render(await api.chooseLibraryFolder()));
 $('#delay').addEventListener('change', (e) => {
   const value = Number(e.target.value);
   if (Number.isFinite(value)) update({ captureDelay: value });
@@ -234,7 +242,10 @@ function createPreviewApi() {
       shortcuts: { region: 'PrintScreen', fullscreen: 'Shift+PrintScreen', delay: 'Ctrl+PrintScreen' },
       overrideSnippingTool: true,
       captureDelay: 3,
-      copyAfterCapture: false,
+      copyAfterCapture: true,
+      autoSave: true,
+      libraryFolder: '',
+      showGallery: true,
       saveFolder: '',
       saveFormat: 'png',
     },
@@ -243,6 +254,7 @@ function createPreviewApi() {
     version: 'aperçu',
     isPackaged: false,
     openAtLogin: false,
+    libraryFolder: 'C:\\Users\\Vous\\Pictures\\Snapit',
   };
   const snapshot = () => JSON.parse(JSON.stringify(s));
   return {
@@ -257,6 +269,8 @@ function createPreviewApi() {
     },
     setOpenAtLogin: async () => snapshot(),
     chooseFolder: async () => snapshot(),
+    chooseLibraryFolder: async () => snapshot(),
+    openLibraryFolder: () => {},
     resetShortcuts: async () => {
       s.settings.shortcuts = { region: 'PrintScreen', fullscreen: 'Shift+PrintScreen', delay: 'Ctrl+PrintScreen' };
       return snapshot();

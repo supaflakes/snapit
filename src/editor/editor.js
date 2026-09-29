@@ -206,6 +206,7 @@ const state = {
   fit: true,
   dirty: false,
   name: 'Capture',
+  libraryId: null, // capture de la bibliothèque affichée (enregistrée automatiquement)
 };
 
 const undoStack = [];
@@ -260,12 +261,15 @@ function redo() {
 
 function setDirty(dirty) {
   state.dirty = dirty;
-  document.title = state.base ? `${dirty ? '• ' : ''}${state.name} — Snapit` : 'Snapit';
+  if (dirty) scheduleAutosave();
+  // une capture de la bibliothèque s'enregistre seule : pas de marque « non enregistrée »
+  document.title = state.base ? `${dirty && !state.libraryId ? '• ' : ''}${state.name} — Snapit` : 'Snapit';
 }
 
 // -------------------------------------------------------------------- image
 
-async function loadImage({ dataUrl, scaleFactor = 1, name }) {
+// `libraryId` et `shapes` : capture rouverte depuis la bibliothèque, avec ses annotations.
+async function loadImage({ dataUrl, scaleFactor = 1, name, libraryId = null, shapes = [], copied = false, notice = null }) {
   const img = new Image();
   img.src = dataUrl;
   await img.decode();
@@ -277,31 +281,75 @@ async function loadImage({ dataUrl, scaleFactor = 1, name }) {
   cancelTextEdit();
   interaction = null;
   state.base = base;
-  state.shapes = [];
+  state.shapes = adoptShapes(shapes);
   state.selected = null;
   state.unit = Math.max(1, scaleFactor || 1);
   state.name = name || defaultName();
+  state.libraryId = libraryId;
   state.fit = true;
   state.nextStep = null;
   undoStack.length = 0;
   redoStack.length = 0;
+  resetAutosave(base);
   Shapes.setUnit(state.unit);
 
   document.body.classList.add('has-image');
-  api?.setHasImage(true);
+  api?.setDocument({ hasImage: true, libraryId });
   setDirty(false);
   layout();
   requestRender();
   updateButtons();
   renderPropsBar();
+  syncGalleryActive();
   stage.focus();
+  if (notice) toast(notice);
+  else if (copied) toast(t('toast.captureCopied'));
 }
 
-// Ouvre une image : dans cette fenêtre si elle est vide, sinon dans une nouvelle.
+// Annotations enregistrées : types connus, réglages complétés, identifiants propres à cette session.
+function adoptShapes(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((s) => s && typeof s === 'object' && Shapes.DEFAULTS[s.type])
+    .map((s) => ({ ...structuredClone(Shapes.DEFAULTS[s.type]), ...s, id: Shapes.nextId() }));
+}
+
+// La capture affichée a été supprimée de la bibliothèque : retour à l'écran d'accueil.
+function unloadImage() {
+  cancelTextEdit();
+  interaction = null;
+  resetAutosave(null);
+  Object.assign(state, { base: null, shapes: [], selected: null, libraryId: null, nextStep: null });
+  undoStack.length = 0;
+  redoStack.length = 0;
+  document.body.classList.remove('has-image');
+  api?.setDocument({ hasImage: false, libraryId: null });
+  setDirty(false);
+  setStatusSize('');
+  updateButtons();
+  renderPropsBar();
+  syncGalleryActive();
+}
+
+// Ouvre une image : dans cette fenêtre si elle est vide. Sinon le processus principal choisit :
+// cette fenêtre si sa capture est enregistrée dans la bibliothèque, une autre sinon.
 function openPayload(payload) {
   if (!payload) return;
-  if (state.base && api) api.openInNewEditor(payload);
+  if (state.base && api) api.showImage(payload);
   else loadImage(payload).catch(() => toast(t('toast.openFailed')));
+}
+
+// Image envoyée par le processus principal (capture, galerie…) : la capture affichée est
+// d'abord enregistrée, texte en cours d'écriture compris.
+let loadQueue = Promise.resolve();
+function replaceDocument(payload) {
+  loadQueue = loadQueue
+    .then(async () => {
+      commitTextEdit();
+      await flushAutosave();
+      await loadImage(payload);
+    })
+    .catch(() => toast(t('toast.openFailed')));
+  return loadQueue;
 }
 
 function defaultName() {
@@ -1715,6 +1763,358 @@ function toast(message) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+// ------------------------------------------------------ enregistrement automatique
+// Une capture de la bibliothèque s'enregistre seule peu après chaque modification : image annotée,
+// annotations (modifiables à la réouverture) et miniature de la galerie.
+
+const AUTOSAVE_DELAY = 700;
+const THUMB_SIZE = { width: 320, height: 200 }; // comme les miniatures créées à la capture (library.js)
+
+const autosave = {
+  timer: 0,
+  rev: 0, // numéro de la dernière modification
+  queuedRev: 0, // dernière modification confiée à la file d'enregistrement
+  savedRev: 0, // dernière modification confirmée sur le disque
+  queuedBase: null, // image d'origine confiée à la file (renvoyée seulement quand elle change : rognage)
+  savedBase: null, // image d'origine confirmée sur le disque
+  queue: Promise.resolve(),
+};
+
+function resetAutosave(base) {
+  clearTimeout(autosave.timer);
+  Object.assign(autosave, { rev: 0, queuedRev: 0, savedRev: 0, queuedBase: base, savedBase: base });
+}
+
+function scheduleAutosave() {
+  if (!state.libraryId || !api) return;
+  autosave.rev++;
+  clearTimeout(autosave.timer);
+  autosave.timer = setTimeout(autosaveWhenIdle, AUTOSAVE_DELAY);
+}
+
+// Attend la fin du geste ou de la saisie en cours avant d'enregistrer.
+function autosaveWhenIdle() {
+  if (interaction || textEdit) autosave.timer = setTimeout(autosaveWhenIdle, AUTOSAVE_DELAY);
+  else flushAutosave();
+}
+
+// Enregistre sans attendre les modifications en suspens ; se résout une fois tout écrit.
+function flushAutosave() {
+  clearTimeout(autosave.timer);
+  if (api && state.libraryId && autosave.rev > autosave.queuedRev) {
+    const snap = autosaveSnapshot(autosave.queuedBase);
+    autosave.queuedRev = snap.rev;
+    autosave.queuedBase = state.base;
+    autosave.queue = autosave.queue.then(() => writeAutosave(snap));
+  }
+  return autosave.queue;
+}
+
+// État à enregistrer, figé tout de suite (l'encodage des images se fait ensuite).
+function autosaveSnapshot(knownBase) {
+  const out = exportCanvas();
+  return {
+    id: state.libraryId,
+    rev: autosave.rev,
+    shapes: structuredClone(state.shapes),
+    unit: state.unit,
+    out,
+    thumb: thumbnailOf(out),
+    base: state.base === knownBase ? null : state.base,
+  };
+}
+
+const saveFields = (snap) => ({ id: snap.id, rev: snap.rev, shapes: snap.shapes, unit: snap.unit, width: snap.out.width, height: snap.out.height });
+
+async function writeAutosave(snap) {
+  const current = () => snap.id === state.libraryId;
+  try {
+    const [image, thumb, base] = await Promise.all([
+      canvasBytes(snap.out, 'image/png'),
+      canvasBytes(snap.thumb, 'image/jpeg', 0.85),
+      snap.base && canvasBytes(snap.base, 'image/png'),
+    ]);
+    await api.librarySave({ ...saveFields(snap), image, thumb, base });
+    if (current()) {
+      autosave.savedRev = Math.max(autosave.savedRev, snap.rev);
+      if (snap.base) autosave.savedBase = snap.base;
+    }
+  } catch {
+    if (current()) {
+      // nouvel essai à la prochaine modification, ou à la fermeture de la fenêtre
+      autosave.queuedRev = autosave.savedRev;
+      autosave.queuedBase = autosave.savedBase;
+    }
+    toast(t('toast.autosaveFailed'));
+  }
+}
+
+// À la fermeture de la fenêtre : envoi synchrone de tout ce qui n'est pas confirmé sur le disque
+// (y compris un enregistrement encore en cours d'encodage, qui n'aura pas le temps d'aboutir).
+function flushAutosaveSync() {
+  clearTimeout(autosave.timer);
+  if (!api || !state.libraryId || autosave.rev <= autosave.savedRev) return;
+  const snap = autosaveSnapshot(autosave.savedBase);
+  api.librarySaveSync({
+    ...saveFields(snap),
+    image: snap.out.toDataURL('image/png'),
+    thumb: snap.thumb.toDataURL('image/jpeg', 0.85),
+    base: snap.base && snap.base.toDataURL('image/png'),
+  });
+}
+
+function thumbnailOf(source) {
+  const ratio = Math.min(1, THUMB_SIZE.width / source.width, THUMB_SIZE.height / source.height);
+  const thumb = document.createElement('canvas');
+  thumb.width = Math.max(1, Math.round(source.width * ratio));
+  thumb.height = Math.max(1, Math.round(source.height * ratio));
+  const g = thumb.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(source, 0, 0, thumb.width, thumb.height);
+  return thumb;
+}
+
+function canvasBytes(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? blob.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject) : reject(new Error('encodage impossible'))),
+      type,
+      quality,
+    );
+  });
+}
+
+// ------------------------------------------------------------------- galerie
+// Miniatures des captures de la bibliothèque, de la plus récente à la plus ancienne, en bas de la fenêtre.
+// Un clic rouvre la capture avec ses annotations ; sa miniature suit chaque enregistrement.
+
+const gallery = {
+  items: [],
+  nodes: new Map(), // id -> élément de la liste
+  scrolledTo: null, // dernière capture active amenée à l'écran
+  demo: null, // aperçu dans un navigateur (?demo) : galerie affichée ou non
+};
+
+const galleryShown = () => (api ? Boolean(appState?.settings.showGallery) : gallery.demo === true);
+
+function applyGallery() {
+  const shown = galleryShown();
+  const changed = $('#gallery').hidden === shown;
+  $('#gallery').hidden = !shown;
+  document.body.classList.toggle('gallery-on', shown);
+  const toggle = $('#btn-gallery');
+  toggle.hidden = !api && gallery.demo === null;
+  toggle.setAttribute('aria-pressed', String(shown));
+  renderGallery();
+  if (changed && state.fit) layout(); // la zone de travail a changé de hauteur
+}
+
+function toggleGallery() {
+  if (api) api.setSettings({ showGallery: !galleryShown() });
+  else {
+    gallery.demo = !gallery.demo;
+    applyGallery();
+  }
+}
+
+async function loadGallery() {
+  try {
+    gallery.items = await api.libraryList();
+  } catch {
+    gallery.items = [];
+  }
+  renderGallery();
+}
+
+function onLibraryChange(event) {
+  if (event.type === 'reset') return loadGallery(); // autre dossier de captures
+  if (event.type === 'update') {
+    // capture réenregistrée : seule sa miniature change
+    const index = gallery.items.findIndex((i) => i.id === event.item.id);
+    if (index < 0) return;
+    gallery.items[index] = event.item;
+    updateGalleryNode(gallery.nodes.get(event.item.id), event.item);
+    return;
+  }
+  if (event.type === 'add' && !gallery.items.some((i) => i.id === event.item.id)) {
+    gallery.items.push(event.item);
+    gallery.items.sort((a, b) => b.created - a.created);
+  } else if (event.type === 'remove') {
+    gallery.items = gallery.items.filter((i) => i.id !== event.id);
+    if (state.libraryId === event.id) unloadImage();
+  }
+  renderGallery();
+}
+
+function renderGallery() {
+  const list = $('#gallery-list');
+  const ids = new Set(gallery.items.map((i) => i.id));
+  for (const [id, node] of gallery.nodes) {
+    if (ids.has(id)) continue;
+    node.remove();
+    gallery.nodes.delete(id);
+  }
+  gallery.items.forEach((item, index) => {
+    let node = gallery.nodes.get(item.id);
+    if (!node) {
+      node = galleryNode();
+      gallery.nodes.set(item.id, node);
+    }
+    updateGalleryNode(node, item);
+    if (list.children[index] !== node) list.insertBefore(node, list.children[index] ?? null);
+  });
+  $('#gallery-count').textContent = gallery.items.length;
+  const empty = $('#gallery-empty');
+  empty.hidden = gallery.items.length > 0;
+  empty.textContent = t(appState && !appState.settings.autoSave ? 'gallery.emptyOff' : 'gallery.empty');
+  syncGalleryActive();
+}
+
+function galleryNode() {
+  const node = document.createElement('div');
+  node.className = 'shot';
+  node.setAttribute('role', 'listitem');
+  const open = document.createElement('button');
+  open.className = 'shot-open';
+  const img = document.createElement('img');
+  Object.assign(img, { alt: '', loading: 'lazy', decoding: 'async', draggable: false });
+  open.append(img);
+  const remove = document.createElement('button');
+  remove.className = 'shot-delete';
+  remove.tabIndex = -1; // au clavier : touche Suppr sur la miniature
+  remove.append(iconEl('i-close'));
+  node.append(open, remove);
+  return node;
+}
+
+function updateGalleryNode(node, item) {
+  node.dataset.id = item.id;
+  const [open, remove] = node.children;
+  const img = open.firstChild;
+  if (img.getAttribute('src') !== item.thumb) img.src = item.thumb;
+  open.title = t('gallery.item', { name: item.name, width: item.width, height: item.height });
+  open.setAttribute('aria-label', item.name);
+  remove.title = t('gallery.delete');
+  remove.setAttribute('aria-label', `${t('gallery.delete')} : ${item.name}`);
+}
+
+// Met en évidence la capture affichée et l'amène à l'écran quand elle change.
+function syncGalleryActive() {
+  for (const [id, node] of gallery.nodes) node.firstChild.setAttribute('aria-current', String(id === state.libraryId));
+  const node = gallery.nodes.get(state.libraryId);
+  const visible = Boolean(node) && !$('#gallery').hidden;
+  if (visible && gallery.scrolledTo !== state.libraryId) {
+    const strip = $('#gallery-strip');
+    const s = strip.getBoundingClientRect();
+    const n = node.getBoundingClientRect();
+    const margin = 16;
+    if (n.left < s.left + margin) strip.scrollLeft += n.left - s.left - margin;
+    else if (n.right > s.right - margin) strip.scrollLeft += n.right - s.right + margin;
+  }
+  gallery.scrolledTo = visible ? state.libraryId : null;
+}
+
+async function openCapture(id, newWindow = false) {
+  if (!newWindow && id === state.libraryId) return;
+  if (!api) {
+    // aperçu dans un navigateur : sélection seulement
+    state.libraryId = id;
+    syncGalleryActive();
+    return;
+  }
+  try {
+    await api.libraryOpen(id, newWindow);
+  } catch {
+    toast(t('toast.openFailed'));
+  }
+}
+
+async function deleteCapture(id) {
+  const index = gallery.items.findIndex((i) => i.id === id);
+  if (index < 0) return;
+  // la capture suivante (plus ancienne), sinon la précédente, prend la place de celle qu'on supprime
+  const next = id === state.libraryId ? (gallery.items[index + 1] ?? gallery.items[index - 1]) : null;
+  const hadFocus = gallery.nodes.get(id)?.contains(document.activeElement);
+  try {
+    if (api) await api.libraryRemove(id);
+    else {
+      gallery.items = gallery.items.filter((i) => i.id !== id);
+      renderGallery();
+    }
+  } catch {
+    toast(t('toast.deleteFailed'));
+    return;
+  }
+  toast(t('toast.captureDeleted'));
+  if (hadFocus) $('#gallery-list').children[Math.min(index, gallery.items.length - 1)]?.firstChild.focus();
+  if (next) openCapture(next.id);
+}
+
+async function copyCapture(id) {
+  if (id === state.libraryId) return copyImage(); // l'image affichée, avec ses dernières modifications
+  try {
+    await api.libraryCopy(id);
+    toast(t('toast.copied'));
+  } catch {
+    toast(t('toast.copyFailed'));
+  }
+}
+
+// Action choisie dans le menu contextuel d'une miniature.
+function runGalleryAction(action, id) {
+  switch (action) {
+    case 'open': return openCapture(id);
+    case 'openNew': return openCapture(id, true);
+    case 'copy': return copyCapture(id);
+    case 'reveal': return api.libraryReveal(id);
+    case 'delete': return deleteCapture(id);
+  }
+}
+
+function buildGallery() {
+  const list = $('#gallery-list');
+  list.addEventListener('click', (e) => {
+    const node = e.target.closest('.shot');
+    if (!node) return;
+    if (e.target.closest('.shot-delete')) deleteCapture(node.dataset.id);
+    else openCapture(node.dataset.id);
+  });
+  list.addEventListener('contextmenu', (e) => {
+    const node = e.target.closest('.shot');
+    if (!node || !api) return;
+    e.preventDefault();
+    api.libraryMenu(node.dataset.id);
+  });
+  list.addEventListener('keydown', (e) => {
+    const node = e.target.closest('.shot');
+    if (!node) return;
+    const nodes = [...list.children];
+    const i = nodes.indexOf(node);
+    const to = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: nodes.length - 1 }[e.key];
+    if (to !== undefined) nodes[Math.max(0, Math.min(nodes.length - 1, to))].firstChild.focus();
+    else if (e.key === 'Delete') deleteCapture(node.dataset.id);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  // molette : défilement horizontal
+  const strip = $('#gallery-strip');
+  strip.addEventListener(
+    'wheel',
+    (e) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      strip.scrollLeft += e.deltaY;
+    },
+    { passive: false },
+  );
+  $('#btn-gallery').addEventListener('click', toggleGallery);
+  $('#btn-gallery-folder').addEventListener('click', () => {
+    if (api) api.openLibraryFolder();
+    else toast(t('toast.desktopOnly'));
+  });
+}
+
 // ------------------------------------------------------------------ clavier
 
 document.addEventListener('keydown', (e) => {
@@ -1845,6 +2245,12 @@ stage.addEventListener(
 );
 window.addEventListener('resize', () => state.fit && layout());
 window.addEventListener('beforeunload', (e) => {
+  if (state.libraryId) {
+    // capture de la bibliothèque : ses dernières modifications sont enregistrées, rien à demander
+    commitTextEdit();
+    flushAutosaveSync();
+    return;
+  }
   if (state.dirty && state.base) {
     e.preventDefault();
     e.returnValue = '';
@@ -1876,6 +2282,7 @@ function applyLanguage() {
   applyShortcutLabels();
   propsKey = null;
   renderPropsBar();
+  renderGallery();
 }
 
 function applyShortcutLabels() {
@@ -1897,6 +2304,7 @@ function applyAppState(next) {
   appState = next;
   lang = next.lang;
   applyLanguage();
+  applyGallery();
 }
 
 $('#btn-settings').addEventListener('click', () => {
@@ -1905,26 +2313,49 @@ $('#btn-settings').addEventListener('click', () => {
 });
 
 buildToolbar();
+buildGallery();
 setTool('arrow');
 updateButtons();
 applyLanguage();
 
 (async () => {
   if (api) {
-    api.onLoadImage((payload) => loadImage(payload));
+    api.onLoadImage(replaceDocument);
     api.onState(applyAppState);
+    api.onLibraryChange(onLibraryChange);
+    api.onLibraryMenu(runGalleryAction);
     applyAppState(await api.getState());
     const initial = await api.getInitialImage();
     if (initial) await loadImage(initial);
+    await loadGallery();
   } else {
     const params = new URLSearchParams(location.search);
     if (params.has('lang')) {
       lang = I18N.resolve(params.get('lang'), navigator.language);
       applyLanguage();
     }
-    if (params.has('demo')) await loadImage({ dataUrl: demoImage(), name: 'Démo' });
+    if (params.has('demo')) {
+      await loadImage({ dataUrl: demoImage(), name: 'Démo', libraryId: 'demo-0' });
+      showDemoGallery();
+    }
   }
 })();
+
+// Galerie de démonstration (?demo) : quelques miniatures de l'image de démonstration.
+function showDemoGallery() {
+  const thumb = thumbnailOf(state.base).toDataURL('image/jpeg', 0.85);
+  const now = Date.now();
+  gallery.items = Array.from({ length: 8 }, (_, i) => ({
+    id: `demo-${i}`,
+    name: `Capture démo ${8 - i}`,
+    created: now - i * 60000,
+    width: state.base.width,
+    height: state.base.height,
+    thumb,
+  }));
+  gallery.demo = true;
+  applyGallery();
+}
 
 // Image de démonstration pour tester l'éditeur dans un navigateur (?demo).
 function demoImage() {

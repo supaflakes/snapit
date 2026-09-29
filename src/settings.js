@@ -12,12 +12,16 @@ const DEFAULT_SHORTCUTS = {
 };
 
 const DEFAULTS = {
+  version: 2, // format du fichier (voir sanitize)
   language: 'auto', // 'auto' | 'fr' | 'en'
   theme: 'dark', // 'system' | 'dark' | 'light'
   shortcuts: { ...DEFAULT_SHORTCUTS },
   overrideSnippingTool: true,
   captureDelay: 3,
-  copyAfterCapture: false,
+  copyAfterCapture: true,
+  autoSave: true, // enregistre chaque capture, annotations comprises, dans la bibliothèque
+  libraryFolder: '', // vide : Images\Snapit
+  showGallery: true, // galerie des captures en bas de l'éditeur
   saveFolder: '', // vide : dossier Images
   saveFormat: 'png', // 'png' | 'jpeg'
 };
@@ -36,7 +40,12 @@ function sanitize(input) {
   }
   if (typeof input.overrideSnippingTool === 'boolean') s.overrideSnippingTool = input.overrideSnippingTool;
   if (Number.isFinite(input.captureDelay)) s.captureDelay = Math.min(60, Math.max(1, Math.round(input.captureDelay)));
-  if (typeof input.copyAfterCapture === 'boolean') s.copyAfterCapture = input.copyAfterCapture;
+  // Avant la version 2, la copie automatique était désactivée par défaut : la valeur enregistrée
+  // n'était souvent que ce défaut. Le nouveau réglage par défaut s'applique donc une fois.
+  if (typeof input.copyAfterCapture === 'boolean' && input.version >= 2) s.copyAfterCapture = input.copyAfterCapture;
+  if (typeof input.autoSave === 'boolean') s.autoSave = input.autoSave;
+  if (typeof input.libraryFolder === 'string') s.libraryFolder = input.libraryFolder;
+  if (typeof input.showGallery === 'boolean') s.showGallery = input.showGallery;
   if (typeof input.saveFolder === 'string') s.saveFolder = input.saveFolder;
   if (['png', 'jpeg'].includes(input.saveFormat)) s.saveFormat = input.saveFormat;
   return s;

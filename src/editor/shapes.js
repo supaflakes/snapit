@@ -560,6 +560,7 @@ const Shapes = (() => {
     setUnit: (u) => {
       U = u;
     },
+    nextId: () => ++seq, // pour les annotations rechargées depuis la bibliothèque
     create,
     draw,
     bounds,
