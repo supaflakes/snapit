@@ -207,6 +207,7 @@ const state = {
   tool: 'arrow',
   lastDrawTool: 'arrow',
   presetsView: false, // catégorie « Mes préréglages » affichée (`tool` reste l'outil de dessin)
+  activePreset: null, // dernier préréglage choisi { tool, id } : modifié ensuite, il peut être mis à jour
   styles: null, // réglages de chaque outil (voir loadStyles)
   presets: null, // préréglages enregistrés, par outil
   nextStep: null, // numéro imposé pour la prochaine étape (null : à la suite des existantes)
@@ -1182,16 +1183,47 @@ function presetItem(tool, preset) {
   remove.setAttribute('aria-label', t('presets.delete'));
   remove.append(iconEl('i-close'));
   remove.addEventListener('click', () => deletePreset(tool, preset.id));
-  item.append(apply, remove);
+  // préréglage choisi puis modifié (classe « modified ») : au survol, le mettre à jour ou revenir à lui
+  const menu = document.createElement('div');
+  menu.className = 'preset-menu';
+  menu.setAttribute('role', 'group');
+  menu.setAttribute('aria-label', t('presets.modified'));
+  menu.append(
+    presetMenuButton(preset.id, 'i-save', 'presets.update', () => updatePreset(tool, preset.id)),
+    presetMenuButton(preset.id, 'i-check', 'presets.reapply', () => choosePreset(tool, preset)),
+  );
+  const actions = document.createElement('div');
+  actions.className = 'preset-actions';
+  actions.append(menu);
+  item.append(apply, remove, actions);
   return item;
+}
+
+function presetMenuButton(id, icon, key, action) {
+  const b = document.createElement('button');
+  b.title = t(`${key}Tip`);
+  b.append(iconEl(icon), t(key));
+  b.addEventListener('click', () => {
+    action();
+    // le menu a disparu : le focus revient sur la miniature, ou sur le texte en cours d'écriture
+    if (textEdit) refocusText();
+    else $(`.preset-apply[data-id="${id}"]`)?.focus();
+  });
+  return b;
 }
 
 function syncPresets(c) {
   if (!c.type) return;
   const style = currentStyle(c);
+  // Le préréglage choisi est modifié quand les réglages affichés, ceux de l'outil, ne sont plus les siens.
+  // Une annotation sélectionnée aux réglages différents de ceux de l'outil n'en vient pas : il reste tel quel.
+  const own = sameStyle(style, pickStyle(c.type, state.styles[c.type]));
+  const active = state.activePreset?.tool === c.type ? state.activePreset.id : null;
   for (const b of $$('#preset-list .preset-apply')) {
     const preset = b.dataset.tool === c.type && state.presets[c.type].find((p) => p.id === b.dataset.id);
-    b.setAttribute('aria-pressed', String(Boolean(preset) && sameStyle(preset.style, style)));
+    const pressed = Boolean(preset) && sameStyle(preset.style, style);
+    b.setAttribute('aria-pressed', String(pressed));
+    b.parentElement.classList.toggle('modified', Boolean(preset) && !pressed && own && preset.id === active);
   }
 }
 
@@ -1199,6 +1231,7 @@ function syncPresets(c) {
 function choosePreset(tool, preset) {
   const focused = document.activeElement?.matches('.preset-apply');
   if (propsContext().type !== tool) setTool(tool, { presets: state.presetsView });
+  state.activePreset = { tool, id: preset.id };
   applyPreset(tool, preset);
   // la liste a pu être reconstruite : le focus reste sur le préréglage choisi
   if (focused && !textEdit) $(`.preset-apply[data-id="${preset.id}"]`)?.focus();
@@ -1230,17 +1263,40 @@ function addPreset() {
     return;
   }
   // un préréglage proposé d'office rejoint simplement « Mes préréglages »
-  if (same) same.custom = true;
-  else if (state.presets[c.type].length < MAX_PRESETS) state.presets[c.type].push({ id: presetId(), style, custom: true });
-  else return;
+  let preset = same;
+  if (preset) preset.custom = true;
+  else if (state.presets[c.type].length < MAX_PRESETS) {
+    preset = { id: presetId(), style, custom: true };
+    state.presets[c.type].push(preset);
+  } else return;
+  state.activePreset = { tool: c.type, id: preset.id };
   savePresets();
   renderPresets(c);
   syncPresets(c);
   toast(t('toast.presetSaved'));
 }
 
+// Enregistre dans le préréglage les réglages affichés, modifiés depuis qu'on l'a choisi.
+function updatePreset(tool, id) {
+  const c = propsContext();
+  const preset = state.presets[tool].find((p) => p.id === id);
+  if (!preset || c.type !== tool) return;
+  const style = currentStyle(c);
+  if (state.presets[tool].some((p) => p !== preset && sameStyle(p.style, style))) {
+    toast(t('toast.presetDuplicate'));
+    return;
+  }
+  preset.style = style;
+  preset.custom = true; // un préréglage proposé d'office, une fois modifié, devient celui de l'utilisateur
+  savePresets();
+  renderPresets(c);
+  syncPresets(c);
+  toast(t('toast.presetUpdated'));
+}
+
 function deletePreset(tool, id) {
   state.presets[tool] = state.presets[tool].filter((p) => p.id !== id);
+  if (state.activePreset?.id === id) state.activePreset = null;
   savePresets();
   const c = propsContext();
   renderPresets(c);
@@ -1602,6 +1658,8 @@ function resetStyle() {
   if (!c.type) return;
   state.styles[c.type] = structuredClone(Shapes.DEFAULTS[c.type]);
   saveStyles();
+  // revenu aux valeurs d'origine : le préréglage choisi n'est plus celui dont on part
+  if (state.activePreset?.tool === c.type) state.activePreset = null;
   if (c.shape) {
     const before = snapshot();
     Object.assign(c.shape, structuredClone(Shapes.DEFAULTS[c.type]));

@@ -100,7 +100,9 @@ Chaque outil mémorise ses réglages d'une session à l'autre ; le bouton ↺ r�
 
 **Préréglages** : en haut du panneau, chaque outil propose des styles enregistrés, appliqués en un clic
 (à l'outil et à l'annotation sélectionnée). `+` enregistre le style actuel, `×` au survol supprime un préréglage.
-Ils sont conservés d'une capture et d'une session à l'autre.
+Si vous modifiez les réglages après avoir choisi un préréglage, il s'encadre de tirets : au survol, **Mettre à jour**
+y enregistre les nouveaux réglages, **Appliquer** revient aux siens. Ils sont conservés d'une capture et d'une session
+à l'autre.
 
 **Mes préréglages** (★ au début de la barre d'outils, touche `M`) réunit les préréglages que vous avez enregistrés
 avec `+`, tous outils confondus : un clic sur l'un d'eux et l'on dessine directement avec son outil, sans quitter la

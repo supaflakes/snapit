@@ -1003,6 +1003,73 @@ body.editing-text .crop-handle {
   display: grid;
 }
 
+/* préréglage choisi puis modifié : cadre en tirets, et au survol un menu pour le mettre à jour ou revenir à lui */
+.preset.modified .preset-apply {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.preset-actions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  display: none;
+  padding-top: 4px; /* relie la miniature au menu : le survol continue de l'une à l'autre */
+}
+
+/* colonnes de droite : le menu s'aligne sur le bord droit pour rester dans le panneau */
+.preset:nth-child(4n + 3) .preset-actions,
+.preset:nth-child(4n) .preset-actions {
+  left: auto;
+  right: 0;
+}
+
+.preset.modified:hover .preset-actions,
+.preset.modified:focus-within .preset-actions {
+  display: block;
+  animation: tip-in 0.12s both;
+}
+
+.preset-menu {
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.preset-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: 12px var(--font);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.preset-menu button:hover,
+.preset-menu button:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.preset-menu .icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-strong);
+}
+
 .preset-add {
   display: grid;
   place-items: center;

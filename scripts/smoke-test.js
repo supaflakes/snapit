@@ -300,7 +300,8 @@ app.whenReady().then(async () => {
       await key(region, 'y', ['control']);
 
       // Mes préréglages : un style enregistré avec + s'y retrouve ; le choisir en fait l'outil de dessin,
-      // sans quitter la catégorie (le préréglage de test est ensuite supprimé)
+      // sans quitter la catégorie. Modifié ensuite, il se met à jour depuis son menu
+      // (le préréglage de test est ensuite supprimé)
       const mine = await region.webContents.executeJavaScript(`(() => {
         setTool('marker');
         const color = '#' + Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, '0');
@@ -309,14 +310,21 @@ app.whenReady().then(async () => {
         const preset = state.presets.marker.find((p) => p.style.color === color);
         setTool('arrow');
         setTool('presets');
-        document.querySelector('.preset-apply[data-id="' + preset?.id + '"]')?.click();
-        const chosen = document.querySelector('.preset-apply[aria-pressed="true"]')?.dataset.id === preset?.id;
-        const result = [preset?.custom, state.presetsView, state.tool, chosen];
+        const button = () => document.querySelector('.preset-apply[data-id="' + preset?.id + '"]');
+        button()?.click();
+        const chosen = button()?.getAttribute('aria-pressed') === 'true';
+        const width = preset?.style.width === 30 ? 31 : 30;
+        setProp('width', width);
+        const modified = Boolean(button()?.parentElement.classList.contains('modified'));
+        button()?.parentElement.querySelector('.preset-menu button')?.click(); // « Mettre à jour »
+        const updated = preset?.style.width === width && button()?.getAttribute('aria-pressed') === 'true';
+        const result = [preset?.custom, state.presetsView, state.tool, chosen, modified, updated];
         if (preset) deletePreset('marker', preset.id);
         setTool('arrow');
         return result;
       })()`);
       check('Mes préréglages : un style enregistré s’y choisit en un clic', mine[0] === true && mine[1] && mine[2] === 'marker' && mine[3], mine.join(', '));
+      check('Mes préréglages : un préréglage modifié se met à jour depuis son menu', mine[4] && mine[5], mine.join(', '));
 
       await key(region, 'c', ['control']);
       await wait(500);
