@@ -18,6 +18,7 @@ const DEFAULTS = {
   shortcuts: { ...DEFAULT_SHORTCUTS },
   overrideSnippingTool: true,
   captureDelay: 3,
+  detectRegions: true, // sélection de zone : fenêtres et éléments sous la souris, capturés d'un clic
   copyAfterCapture: true,
   autoSave: true, // enregistre chaque capture, annotations comprises, dans la bibliothèque
   libraryFolder: '', // vide : Images\Snapit
@@ -40,6 +41,7 @@ function sanitize(input) {
   }
   if (typeof input.overrideSnippingTool === 'boolean') s.overrideSnippingTool = input.overrideSnippingTool;
   if (Number.isFinite(input.captureDelay)) s.captureDelay = Math.min(60, Math.max(1, Math.round(input.captureDelay)));
+  if (typeof input.detectRegions === 'boolean') s.detectRegions = input.detectRegions;
   // Avant la version 2, la copie automatique était désactivée par défaut : la valeur enregistrée
   // n'était souvent que ce défaut. Le nouveau réglage par défaut s'applique donc une fois.
   if (typeof input.copyAfterCapture === 'boolean' && input.version >= 2) s.copyAfterCapture = input.copyAfterCapture;

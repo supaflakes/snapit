@@ -4,10 +4,8 @@
 // Les combinaisons avec Impr. écran passent par un petit assistant (hook clavier bas niveau)
 // pour garder la priorité sur l'Outil Capture de Windows ; les autres utilisent globalShortcut.
 const { globalShortcut } = require('electron');
-const { spawn, execFile } = require('child_process');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+const { spawn } = require('child_process');
+const { buildHelper } = require('./native/helper');
 
 const MODIFIERS = { Ctrl: 1, Control: 1, CommandOrControl: 1, CmdOrCtrl: 1, Alt: 2, Shift: 4, Super: 8, Meta: 8 };
 const MODIFIER_NAMES = [[1, 'Ctrl'], [2, 'Alt'], [4, 'Shift'], [8, 'Super']];
@@ -57,34 +55,6 @@ function parseAccelerator(accelerator) {
 
 function acceleratorFrom(mods, key) {
   return [...MODIFIER_NAMES.filter(([bit]) => mods & bit).map(([, name]) => name), key].join('+');
-}
-
-// Compile l'assistant avec le compilateur C# fourni avec Windows (.NET Framework), une seule fois par version.
-async function buildHelper(dir) {
-  const source = fs.readFileSync(path.join(__dirname, 'native', 'keyhook.cs'), 'utf8');
-  const hash = crypto.createHash('sha1').update(source).digest('hex').slice(0, 10);
-  const exe = path.join(dir, `keyhook-${hash}.exe`);
-  if (fs.existsSync(exe)) return exe;
-
-  const windir = process.env.WINDIR || 'C:\\Windows';
-  const csc = ['Framework64', 'Framework']
-    .map((f) => path.join(windir, 'Microsoft.NET', f, 'v4.0.30319', 'csc.exe'))
-    .find((p) => fs.existsSync(p));
-  if (!csc) throw new Error('csc.exe introuvable');
-
-  fs.mkdirSync(dir, { recursive: true });
-  const src = path.join(dir, 'keyhook.cs');
-  fs.writeFileSync(src, source);
-  await new Promise((resolve, reject) => {
-    execFile(csc, ['/nologo', '/optimize', '/target:exe', `/out:${exe}`, src], { windowsHide: true }, (err, stdout) =>
-      err ? reject(new Error(String(stdout || err.message))) : resolve(),
-    );
-  });
-  // supprime les versions précédentes de l'assistant
-  for (const name of fs.readdirSync(dir)) {
-    if (/^keyhook-.*\.exe$/.test(name) && path.join(dir, name) !== exe) fs.rmSync(path.join(dir, name), { force: true });
-  }
-  return exe;
 }
 
 class HelperProcess {
@@ -169,7 +139,7 @@ class Hotkeys {
   async init() {
     if (process.platform !== 'win32') return;
     try {
-      const exe = await buildHelper(this.helperDir);
+      const exe = await buildHelper(this.helperDir, 'keyhook');
       this.helper = new HelperProcess(exe, {
         onLine: (id) => this.handle(id),
         onExit: () => {

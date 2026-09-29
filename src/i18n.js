@@ -33,6 +33,7 @@
       'filter.jpeg': 'Image JPEG',
       'capture.name': 'Capture {date} à {time}',
       'overlay.hint': 'Glissez pour capturer une zone  ·  Clic : écran entier  ·  Échap : annuler',
+      'overlay.hintDetect': 'Clic : capturer la zone en surbrillance  ·  Glisser : zone libre  ·  Molette : zone plus grande ou plus petite  ·  Échap : annuler',
 
       // Éditeur
       'editor.capture': 'Capturer',
@@ -239,6 +240,8 @@
       'settings.delay': 'Délai de la capture différée',
       'settings.seconds': 'secondes',
       'settings.copyAfter': 'Copier automatiquement chaque capture dans le presse-papiers',
+      'settings.detectRegions': 'Détecter les fenêtres et les zones sous la souris',
+      'settings.detectRegionsHelp': 'Pendant la sélection, la fenêtre, la page web ou l’élément survolé se met en surbrillance et se capture d’un clic ; la molette passe à une zone plus grande ou plus petite.',
       'settings.library': 'Bibliothèque de captures',
       'settings.autoSave': 'Enregistrer automatiquement chaque capture',
       'settings.autoSaveHelp': 'L’image et toutes vos annotations sont enregistrées dans le dossier ci-dessous, puis mises à jour à chaque modification.',
@@ -291,6 +294,7 @@
       'filter.jpeg': 'JPEG image',
       'capture.name': 'Capture {date} at {time}',
       'overlay.hint': 'Drag to capture a region  ·  Click: full screen  ·  Esc: cancel',
+      'overlay.hintDetect': 'Click: capture the highlighted area  ·  Drag: free region  ·  Scroll: larger or smaller area  ·  Esc: cancel',
 
       'editor.capture': 'Capture',
       'editor.captureTip': 'Capture region (Ctrl+N)',
@@ -495,6 +499,8 @@
       'settings.delay': 'Delayed capture timer',
       'settings.seconds': 'seconds',
       'settings.copyAfter': 'Automatically copy each capture to the clipboard',
+      'settings.detectRegions': 'Detect windows and areas under the mouse',
+      'settings.detectRegionsHelp': 'While selecting, the window, web page or element under the mouse is highlighted and captured with a click; scroll to switch to a larger or smaller area.',
       'settings.library': 'Capture library',
       'settings.autoSave': 'Automatically save every capture',
       'settings.autoSaveHelp': 'The image and all your annotations are saved to the folder below, then updated whenever you edit them.',

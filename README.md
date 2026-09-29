@@ -22,9 +22,28 @@ Snapit s'installe dans la zone de notification : fermer l'éditeur ne quitte pas
 
 Les raccourcis se changent dans **Paramètres** (icône ⚙ de l'éditeur ou menu de la zone de notification).
 
-Pendant la sélection : glisser pour choisir la zone, simple clic pour l'écran entier,
-`Échap` ou clic droit pour annuler. Une loupe affiche les pixels sous le curseur.
-Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %) sont gérés.
+Pendant la sélection, comme dans Snagit, Snapit **détecte ce qui se trouve sous la souris** et le met en
+surbrillance : une fenêtre, un menu ouvert, la barre des tâches, et à l'intérieur des fenêtres la page web d'un
+navigateur, une barre d'outils, un panneau, une liste, une image ou un bouton.
+
+| Action | Effet |
+| --- | --- |
+| Clic | Capture la zone en surbrillance (l'écran entier au-dessus du bureau) |
+| Glisser | Capture une zone libre |
+| Molette vers le haut / `↑` | Zone englobante (par exemple la fenêtre plutôt que la page), jusqu'à l'écran entier |
+| Molette vers le bas / `↓` | Zone plus petite |
+| `Entrée` | Capture la zone en surbrillance |
+| `Échap` ou clic droit | Annule |
+
+Une zone choisie à la molette reste sélectionnée tant que la souris ne la quitte pas. La loupe affiche les pixels
+sous le curseur et la taille de la zone. Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %)
+sont gérés.
+
+La détection repose sur un second petit assistant (`src/native/regions.cs`), compilé comme celui du clavier : au
+moment de la capture, il relève la position des fenêtres visibles et de leurs sous-fenêtres, puis, sous la souris,
+celle des éléments d'interface grâce à UI Automation (l'interface d'accessibilité de Windows). Il ne lit que des
+positions et des types d'éléments, jamais de texte ni de contenu. L'option « Détecter les fenêtres et les zones sous
+la souris » des paramètres la désactive : un clic capture alors l'écran entier, comme avant.
 
 Par défaut, chaque capture est **copiée dans le presse-papiers** et **enregistrée dans la bibliothèque**
 (voir ci-dessous) ; les deux se désactivent dans les paramètres.
@@ -124,7 +143,8 @@ On peut aussi glisser-déposer une image dans la fenêtre.
 - **Raccourcis de capture** : cliquer sur un raccourci puis appuyer sur la combinaison voulue ; l'état de chaque
   raccourci est affiché (actif, prioritaire sur l'Outil Capture, ou déjà pris par une autre application).
 - **Utiliser Impr. écran pour Snapit** plutôt que l'Outil Capture de Windows.
-- **Délai** de la capture différée, **copie automatique** de chaque capture dans le presse-papiers (activée par défaut).
+- **Délai** de la capture différée, **détection des fenêtres et des zones** sous la souris et **copie automatique**
+  de chaque capture dans le presse-papiers (toutes deux activées par défaut).
 - **Bibliothèque de captures** : enregistrement automatique de chaque capture, dossier des captures,
   affichage de la galerie en bas de l'éditeur (tous deux activés par défaut).
 - **Dossier et format** proposés par « Enregistrer » (`Ctrl+S`).
@@ -133,9 +153,9 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 
 ## Développement
 
-- `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, capture plein écran,
-  sélection de zone simulée, annotations, réglages, Mes préréglages, annuler/rétablir, presse-papiers, bibliothèque
-  et galerie).
+- `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, détection des fenêtres et des
+  éléments de page, capture plein écran, sélection de zone simulée, annotations, réglages, Mes préréglages,
+  annuler/rétablir, presse-papiers, bibliothèque et galerie).
   Affiche brièvement l'overlay de sélection. Il utilise son propre profil et sa propre bibliothèque
   (dans `%TEMP%\snapit-smoke`) : vos paramètres et vos captures ne sont pas touchés.
 - `npm run icons` : régénère les icônes de `assets/`.
@@ -152,7 +172,10 @@ src/main.js            processus principal : zone de notification, capture, fen�
 src/settings.js        paramètres de l'application (settings.json)
 src/library.js         bibliothèque des captures (enregistrement automatique, galerie)
 src/hotkeys.js         raccourcis globaux et assistant clavier
+src/regions.js         détection des fenêtres et des éléments d'interface pour la sélection de zone
+src/native/helper.js   compilation des assistants natifs (compilateur C# fourni avec Windows)
 src/native/keyhook.cs  assistant clavier (hook bas niveau) pour Impr. écran
+src/native/regions.cs  assistant de détection : fenêtres, sous-fenêtres, éléments UI Automation
 src/i18n.js            traductions français / anglais, partagées par toutes les fenêtres
 src/theme.css          couleurs des thèmes sombre et clair
 src/preload.js         pont IPC exposé aux pages (contextIsolation + sandbox)

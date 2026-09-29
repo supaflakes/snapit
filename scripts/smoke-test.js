@@ -195,6 +195,68 @@ app.whenReady().then(async () => {
       await wait(300);
     }
 
+    // 0 ter. Détection des zones : une fenêtre de test, puis un élément de sa page (UI Automation),
+    // se mettent en surbrillance sous la souris ; Échap annule sans rien capturer
+    const regions = snapit.getRegions();
+    for (let i = 0; i < 150 && !regions.child; i++) await wait(100);
+    check('assistant de détection des zones démarré', Boolean(regions.child));
+    if (regions.child) {
+      const primary = screen.getPrimaryDisplay();
+      const target = new BrowserWindow({
+        x: primary.bounds.x + 300,
+        y: primary.bounds.y + 200,
+        width: 640,
+        height: 420,
+        frame: false,
+        resizable: false,
+        show: false,
+        skipTaskbar: true,
+        alwaysOnTop: true,
+      });
+      const page = '<body style="margin:0;background:#1e293b"><div role="img" aria-label="Image" style="position:absolute;left:40px;top:90px;width:300px;height:200px;background:#f59e0b"></div></body>';
+      await target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`);
+      target.showInactive();
+      await wait(600);
+      const detecting = snapit.startCapture('region');
+      let overlayWin = null;
+      for (let i = 0; i < 60 && !overlayWin; i++) {
+        await wait(50);
+        overlayWin = BrowserWindow.getAllWindows().find(
+          (w) => w.isVisible() && w.webContents.getURL().includes('/overlay/') && screen.getDisplayMatching(w.getBounds()).id === primary.id,
+        );
+      }
+      if (overlayWin) {
+        await wait(300);
+        // attendus en pixels de l'image de l'écran
+        const sf = primary.scaleFactor;
+        const origin = screen.dipToScreenRect(null, primary.bounds);
+        const tb = screen.dipToScreenRect(null, target.getBounds());
+        const cb = screen.dipToScreenRect(null, target.getContentBounds());
+        const frame = [tb.x - origin.x, tb.y - origin.y, tb.width, tb.height];
+        const image = [cb.x - origin.x + Math.round(40 * sf), cb.y - origin.y + Math.round(90 * sf), Math.round(300 * sf), Math.round(200 * sf)];
+        // la page d'une fenêtre sans cadre peut être décalée de quelques pixels selon l'échelle de l'écran
+        const near = (a, b, tolerance = 8) => Boolean(a) && a.every((v, i) => Math.abs(v - b[i]) <= tolerance);
+        // survole un point jusqu'à ce que la zone attendue soit en surbrillance (les éléments arrivent après la fenêtre)
+        const hoverUntil = async (x, y, expected) => {
+          let h = null;
+          for (let i = 0; i < 30 && !near(h, expected); i++) {
+            overlayWin.webContents.sendInputEvent({ type: 'mouseMove', x: x + (i % 2), y });
+            await wait(120);
+            h = await overlayWin.webContents.executeJavaScript('hovered && [hovered.x, hovered.y, hovered.w, hovered.h]');
+          }
+          return h;
+        };
+        const onWindow = await hoverUntil(320, 600, frame);
+        check('détection : la fenêtre sous la souris', near(onWindow, frame), `${JSON.stringify(onWindow)}, attendu ${JSON.stringify(frame)}`);
+        const onImage = await hoverUntil(490, 390, image);
+        check('détection : l’élément de page sous la souris', near(onImage, image), `${JSON.stringify(onImage)}, attendu ${JSON.stringify(image)}`);
+        await savePage(overlayWin, '0-detection.png');
+        await key(overlayWin, 'Escape');
+      }
+      await detecting;
+      target.destroy();
+    }
+
     // 1. Plein écran : l'image doit arriver dans l'éditeur vide existant
     await snapit.startCapture('fullscreen');
     await wait(1200);

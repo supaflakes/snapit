@@ -22,6 +22,7 @@ const I18N = require('./i18n');
 const { SettingsStore, DEFAULT_SHORTCUTS } = require('./settings');
 const { Hotkeys } = require('./hotkeys');
 const { Library, THUMB_SIZE } = require('./library');
+const { Regions } = require('./regions');
 
 const ASSETS = path.join(__dirname, '..', 'assets');
 const PRELOAD = path.join(__dirname, 'preload.js');
@@ -41,6 +42,7 @@ let settingsWindow = null;
 let settings = null;
 let hotkeys = null;
 let library = null;
+let regions = null; // détection des fenêtres et des éléments sous la souris
 
 const editors = new Map(); // webContents.id -> { win, hasImage, libraryId, focusedAt }
 const pendingImages = new Map(); // webContents.id -> image à charger au démarrage de l'éditeur
@@ -284,6 +286,10 @@ function onSettingsChanged(next, previous) {
   }
   if (next.language !== previous.language) destroyOverlays();
   if (next.libraryFolder !== previous.libraryFolder) sendToEditors('library:changed', { type: 'reset' });
+  if (next.detectRegions !== previous.detectRegions) {
+    if (next.detectRegions) regions.start();
+    else regions.stop();
+  }
   refreshTray();
   broadcast();
 }
@@ -342,7 +348,9 @@ async function startCapture(mode = 'region') {
     }
     // Laisse le temps à Windows de retirer nos fenêtres (et le menu de la zone de notification) de l'écran.
     await delay(hidden.length ? 250 : 180);
-    const captures = await grabDisplays();
+    // les fenêtres visibles sont relevées en même temps que l'image, pour la détection de zone
+    const detect = mode === 'region' && settings.get().detectRegions;
+    const [captures, windows] = await Promise.all([grabDisplays(), detect ? regions.windows() : null]);
     if (!captures.length) throw new Error(t('error.noScreen'));
 
     let result;
@@ -351,7 +359,7 @@ async function startCapture(mode = 'region') {
       const c = captures.find((c) => c.display.id === target.id) ?? captures[0];
       result = { image: c.image, scaleFactor: c.display.scaleFactor };
     } else {
-      result = await selectRegion(captures);
+      result = await selectRegion(captures, windows);
     }
 
     restoreWindows(hidden);
@@ -420,6 +428,9 @@ function getOverlay(display) {
 
   const win = new BrowserWindow({
     ...display.bounds,
+    // fenêtre « outil » (WS_EX_TOOLWINDOW) : Chrome, Edge et les autres applications Chromium ne se croient
+    // pas cachées par l'overlay, et continuent de décrire leur page pour la détection des zones
+    type: 'toolbar',
     show: false,
     frame: false,
     resizable: false,
@@ -454,21 +465,62 @@ function destroyOverlays() {
   overlays.clear();
 }
 
-function selectRegion(captures) {
+// Fenêtres et éléments détectés : l'assistant les décrit en pixels physiques de l'écran virtuel, l'overlay
+// de chaque écran en pixels de l'image capturée (celle-ci est à la résolution physique de l'écran).
+function locate(capture) {
+  capture.physical = screen.dipToScreenRect(null, capture.display.bounds);
+  capture.size = capture.image.getSize();
+}
+
+// [x, y, l, h] physique -> pixels de l'image de l'écran, coupé à ses bords (null s'il est ailleurs)
+function toImageRect(c, [x, y, w, h]) {
+  const sx = c.size.width / c.physical.width;
+  const sy = c.size.height / c.physical.height;
+  const x1 = clamp(Math.round((x - c.physical.x) * sx), 0, c.size.width);
+  const y1 = clamp(Math.round((y - c.physical.y) * sy), 0, c.size.height);
+  const x2 = clamp(Math.round((x + w - c.physical.x) * sx), 0, c.size.width);
+  const y2 = clamp(Math.round((y + h - c.physical.y) * sy), 0, c.size.height);
+  return x2 - x1 >= 1 && y2 - y1 >= 1 ? [x1, y1, x2 - x1, y2 - y1] : null;
+}
+
+// Fenêtres visibles sur l'écran de `c`. Les sous-fenêtres hors de l'écran restent (à null) : les autres
+// désignent leur parent par son indice.
+function windowsOn(c, windows) {
+  if (!windows) return null;
+  return windows
+    .map((w) => ({
+      hwnd: w.hwnd,
+      frame: toImageRect(c, w.frame),
+      client: w.client ? toImageRect(c, w.client) : null,
+      children: w.children.map(([x, y, cw, ch, parent]) => {
+        const r = toImageRect(c, [x, y, cw, ch]);
+        return r && [...r, parent];
+      }),
+    }))
+    .filter((w) => w.frame);
+}
+
+function selectRegion(captures, windows = null) {
   return new Promise((resolve) => {
     session = { captures, resolve };
     globalShortcut.register('Escape', () => endSession(null));
-    const hint = t('overlay.hint');
+    const hint = t(windows ? 'overlay.hintDetect' : 'overlay.hint');
+    const cursor = screen.getCursorScreenPoint();
 
     const shown = captures.map(async (c) => {
+      locate(c);
       const overlay = getOverlay(c.display);
       await overlay.ready;
       const wc = overlay.win.webContents;
       const ack = new Promise((r) => overlayAcks.set(wc.id, r));
+      const b = c.display.bounds;
+      const here = cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
       // JPEG : bien plus rapide à encoder que PNG, et suffisant pour l'aperçu figé.
       wc.send('overlay:show', {
         dataUrl: `data:image/jpeg;base64,${c.image.toJPEG(92).toString('base64')}`,
         hint,
+        regions: windowsOn(c, windows),
+        cursor: here ? { x: cursor.x - b.x, y: cursor.y - b.y } : null, // pour mettre en évidence la zone d'emblée
       });
       await Promise.race([ack, delay(1500)]);
       overlayAcks.delete(wc.id);
@@ -506,10 +558,36 @@ ipcMain.on('overlay:ready', (e) => {
 
 ipcMain.on('overlay:cancel', () => endSession(null));
 
+// Capture affichée par l'overlay `sender` pendant la sélection en cours
+function captureOf(sender) {
+  const overlay = [...overlays.values()].find((o) => !o.win.isDestroyed() && o.win.webContents.id === sender.id);
+  return session?.captures.find((c) => c.display.id === overlay?.displayId) ?? null;
+}
+
+// Éléments d'interface sous la souris (point en pixels de l'image de l'overlay), du plus grand au plus petit
+ipcMain.handle('overlay:probe', async (e, { hwnd, x, y }) => {
+  const capture = captureOf(e.sender);
+  if (!capture?.physical || !Number.isSafeInteger(hwnd) || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const px = capture.physical.x + (x * capture.physical.width) / capture.size.width;
+  const py = capture.physical.y + (y * capture.physical.height) / capture.size.height;
+  const chain = await regions.probe(hwnd, px, py);
+  if (!chain || !session) return null;
+  return chain
+    .map(([cx, cy, cw, ch, type]) => {
+      const r = toImageRect(capture, [cx, cy, cw, ch]);
+      return r && [...r, String(type)];
+    })
+    .filter(Boolean);
+});
+
+// Le clavier (Entrée, flèches, Échap) suit la souris d'un écran à l'autre.
+ipcMain.on('overlay:focus', (e) => {
+  if (session) BrowserWindow.fromWebContents(e.sender)?.focus();
+});
+
 ipcMain.on('overlay:select', (e, frac) => {
   if (!session) return;
-  const overlay = [...overlays.values()].find((o) => !o.win.isDestroyed() && o.win.webContents.id === e.sender.id);
-  const capture = session.captures.find((c) => c.display.id === overlay?.displayId);
+  const capture = captureOf(e.sender);
   if (!capture) return endSession(null);
 
   const { width: W, height: H } = capture.image.getSize();
@@ -733,6 +811,9 @@ app.whenReady().then(() => {
   hotkeys.apply(shortcuts, overrideSnippingTool);
   hotkeys.init(); // compile/démarre l'assistant clavier en arrière-plan, puis réapplique les raccourcis
 
+  regions = new Regions({ helperDir: path.join(app.getPath('userData'), 'bin') });
+  if (settings.get().detectRegions) regions.start(); // prêt dès la première capture
+
   createTray();
   nativeTheme.on('updated', broadcast);
 
@@ -752,6 +833,7 @@ app.on('before-quit', () => {
 
 app.on('will-quit', () => {
   hotkeys?.dispose();
+  regions?.stop();
   globalShortcut.unregisterAll();
 });
 
@@ -762,4 +844,5 @@ module.exports = {
   getSettings: () => settings,
   getHotkeys: () => hotkeys,
   getLibrary: () => library,
+  getRegions: () => regions,
 };

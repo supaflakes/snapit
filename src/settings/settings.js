@@ -90,6 +90,7 @@ function render(next) {
   $('#startup').disabled = !state.isPackaged;
   $('#startup-note').hidden = state.isPackaged;
   setSwitch('#override', s.overrideSnippingTool);
+  setSwitch('#detect-regions', s.detectRegions);
   setSwitch('#copy-after', s.copyAfterCapture);
   if (document.activeElement !== $('#delay')) $('#delay').value = s.captureDelay;
   setSwitch('#auto-save', s.autoSave);
@@ -199,6 +200,7 @@ $('#format').addEventListener('click', (e) => {
 });
 $('#startup').addEventListener('click', async () => render(await api.setOpenAtLogin(!state.openAtLogin)));
 $('#override').addEventListener('click', () => update({ overrideSnippingTool: !state.settings.overrideSnippingTool }));
+$('#detect-regions').addEventListener('click', () => update({ detectRegions: !state.settings.detectRegions }));
 $('#copy-after').addEventListener('click', () => update({ copyAfterCapture: !state.settings.copyAfterCapture }));
 $('#auto-save').addEventListener('click', () => update({ autoSave: !state.settings.autoSave }));
 $('#show-gallery').addEventListener('click', () => update({ showGallery: !state.settings.showGallery }));
@@ -242,6 +244,7 @@ function createPreviewApi() {
       shortcuts: { region: 'PrintScreen', fullscreen: 'Shift+PrintScreen', delay: 'Ctrl+PrintScreen' },
       overrideSnippingTool: true,
       captureDelay: 3,
+      detectRegions: true,
       copyAfterCapture: true,
       autoSave: true,
       libraryFolder: '',
