@@ -88,6 +88,10 @@ body {
   transition: background-color 0.12s, color 0.12s;
 }
 
+.btn[hidden] {
+  display: none;
+}
+
 .btn:hover {
   background: var(--panel-2);
 }
@@ -1017,6 +1021,44 @@ body.editing-text .crop-handle {
   background: var(--accent-soft);
 }
 
+/* catégorie « Mes préréglages » : les préréglages de tous les outils, puis les réglages de l'outil choisi ;
+   tout le panneau défile sous son titre */
+.panel.presets-view {
+  overflow-y: auto;
+}
+
+.presets-view .panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+
+.presets-view .presets-head {
+  display: none;
+}
+
+.presets-view .props-controls {
+  flex: none;
+  overflow: visible;
+}
+
+.presets-empty {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.props-subhead {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
 /* infobulle alignée à droite pour les boutons en bord de fenêtre */
 .tip-left[data-tip]:hover::after {
   left: auto;
@@ -1025,10 +1067,6 @@ body.editing-text .crop-handle {
 }
 
 /* ---------------------------------------------------------------- galerie */
-
-#btn-gallery[hidden] {
-  display: none;
-}
 
 #btn-gallery[aria-pressed="true"] {
   background: var(--accent-soft);

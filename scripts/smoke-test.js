@@ -299,6 +299,25 @@ app.whenReady().then(async () => {
       check('Ctrl+Z annule un changement de réglage', props[2] && props[3], props.join(', '));
       await key(region, 'y', ['control']);
 
+      // Mes préréglages : un style enregistré avec + s'y retrouve ; le choisir en fait l'outil de dessin,
+      // sans quitter la catégorie (le préréglage de test est ensuite supprimé)
+      const mine = await region.webContents.executeJavaScript(`(() => {
+        setTool('marker');
+        const color = '#' + Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, '0');
+        setProp('color', color);
+        addPreset();
+        const preset = state.presets.marker.find((p) => p.style.color === color);
+        setTool('arrow');
+        setTool('presets');
+        document.querySelector('.preset-apply[data-id="' + preset?.id + '"]')?.click();
+        const chosen = document.querySelector('.preset-apply[aria-pressed="true"]')?.dataset.id === preset?.id;
+        const result = [preset?.custom, state.presetsView, state.tool, chosen];
+        if (preset) deletePreset('marker', preset.id);
+        setTool('arrow');
+        return result;
+      })()`);
+      check('Mes préréglages : un style enregistré s’y choisit en un clic', mine[0] === true && mine[1] && mine[2] === 'marker' && mine[3], mine.join(', '));
+
       await key(region, 'c', ['control']);
       await wait(500);
       const items = await clipboard.read();

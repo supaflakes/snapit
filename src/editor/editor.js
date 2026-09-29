@@ -143,6 +143,8 @@ const STARTER_PRESETS = {
 let presetSeq = 0;
 const presetId = () => `p${Date.now().toString(36)}${(presetSeq++).toString(36)}`;
 
+// Préréglage : { id, style, custom }. `custom` : enregistré par l'utilisateur (bouton +), donc réuni avec
+// ceux des autres outils dans la catégorie « Mes préréglages » ; les préréglages proposés restent dans leur outil.
 function loadPresets() {
   let saved = {};
   try {
@@ -152,13 +154,17 @@ function loadPresets() {
   }
   const presets = {};
   for (const tool of Object.keys(Shapes.DEFAULTS)) {
-    const list = Array.isArray(saved[tool])
-      ? saved[tool]
-      : STARTER_PRESETS[tool].map((overrides) => ({ id: presetId(), style: { ...Shapes.DEFAULTS[tool], ...overrides } }));
+    const starters = STARTER_PRESETS[tool].map((overrides) => pickStyle(tool, { ...Shapes.DEFAULTS[tool], ...overrides }));
+    const list = Array.isArray(saved[tool]) ? saved[tool] : starters.map((style) => ({ style, custom: false }));
     // ne garde que les réglages connus de l'outil, complétés par les valeurs par défaut
     presets[tool] = list
       .filter((p) => p && typeof p.style === 'object')
-      .map((p) => ({ id: p.id || presetId(), style: pickStyle(tool, { ...Shapes.DEFAULTS[tool], ...p.style }) }));
+      .map((p) => {
+        const style = pickStyle(tool, { ...Shapes.DEFAULTS[tool], ...p.style });
+        // enregistré avant « Mes préréglages » : de l'utilisateur s'il ne fait pas partie des préréglages proposés
+        const custom = typeof p.custom === 'boolean' ? p.custom : !starters.some((s) => sameStyle(s, style));
+        return { id: p.id || presetId(), style, custom };
+      });
   }
   return presets;
 }
@@ -178,7 +184,10 @@ function pickStyle(tool, source) {
   return style;
 }
 
+const sameStyle = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
 const TOOLS = {
+  presets: { key: 'm' }, // catégorie « Mes préréglages » : on y dessine avec l'outil du préréglage choisi
   select: { key: 'v', cursor: 'default' },
   arrow: { key: 'a', cursor: 'crosshair' },
   rect: { key: 'r', cursor: 'crosshair' },
@@ -197,6 +206,7 @@ const state = {
   shapes: [],
   tool: 'arrow',
   lastDrawTool: 'arrow',
+  presetsView: false, // catégorie « Mes préréglages » affichée (`tool` reste l'outil de dessin)
   styles: null, // réglages de chaque outil (voir loadStyles)
   presets: null, // préréglages enregistrés, par outil
   nextStep: null, // numéro imposé pour la prochaine étape (null : à la suite des existantes)
@@ -967,14 +977,22 @@ function nudgeSelected(dx, dy) {
 
 // -------------------------------------------------------------- toolbar
 
-function setTool(tool) {
+// `presets` : catégorie « Mes préréglages », où l'on dessine avec l'outil `tool` (celui du préréglage choisi)
+// sans quitter la catégorie. `setTool('presets')` l'ouvre avec le dernier outil de dessin.
+function setTool(tool, { presets = false } = {}) {
+  if (tool === 'presets') {
+    presets = true;
+    tool = state.lastDrawTool;
+  }
   if (!TOOLS[tool]) return;
   commitTextEdit();
   state.tool = tool;
+  state.presetsView = presets;
   if (!['select', 'crop'].includes(tool)) state.lastDrawTool = tool;
   // la barre de propriétés doit refléter le nouvel outil, pas l'annotation d'un autre type
   if (tool === 'crop' || (state.selected && tool !== 'select' && state.selected.type !== tool)) select(null);
-  $$('.tool').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === tool)));
+  const pressed = presets ? 'presets' : tool;
+  $$('.tool').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === pressed)));
   $('#status-hint').textContent = t(`hint.${tool}`);
   stage.style.cursor = TOOLS[tool].cursor;
   renderPropsBar();
@@ -1004,7 +1022,7 @@ function propValues(c) {
 
 function renderPropsBar() {
   const c = propsContext();
-  const key = `${c.type ?? state.tool}:${c.shape?.id ?? 'outil'}`;
+  const key = `${state.presetsView ? 'mes-prereglages' : 'outil'}:${c.type ?? state.tool}:${c.shape?.id ?? 'outil'}`;
   if (key !== propsKey) {
     propsKey = key;
     buildPropsBar(c);
@@ -1031,14 +1049,16 @@ function buildPropsBar(c) {
   box.replaceChildren();
   propControls = [];
 
-  const tool = c.type ?? state.tool;
-  title.append(iconEl(TOOL_ICONS[tool] ?? 'i-select'), t(`tool.${tool}`));
-  if (c.shape) {
-    const small = document.createElement('small');
-    small.textContent = t('panel.selection');
-    title.append(small);
+  // « Mes préréglages » : la liste de la catégorie, puis les réglages de l'outil choisi sous leur propre titre
+  const presetsView = state.presetsView && Boolean(c.type);
+  $('#propsbar').classList.toggle('presets-view', presetsView);
+  if (presetsView) {
+    title.append(iconEl('i-presets'), t('tool.presets'));
+    box.append(propsSubhead(c));
+  } else {
+    appendToolTitle(title, c);
   }
-  $('#btn-reset-style').hidden = !c.type;
+  $('#btn-reset-style').hidden = !c.type || presetsView;
   renderPresets(c);
 
   if (!c.type) {
@@ -1055,6 +1075,37 @@ function buildPropsBar(c) {
   }
 }
 
+// Outil (ou annotation sélectionnée) dont le panneau affiche les réglages.
+function appendToolTitle(el, c) {
+  const tool = c.type ?? state.tool;
+  el.append(iconEl(TOOL_ICONS[tool] ?? 'i-select'), t(`tool.${tool}`));
+  if (c.shape) {
+    const small = document.createElement('small');
+    small.textContent = t('panel.selection');
+    el.append(small);
+  }
+}
+
+// Titre des réglages dans « Mes préréglages » : l'outil, et de quoi rétablir ses valeurs d'origine.
+function propsSubhead(c) {
+  const head = document.createElement('div');
+  head.className = 'props-subhead';
+  const title = document.createElement('div');
+  title.className = 'props-title';
+  appendToolTitle(title, c);
+  const reset = document.createElement('button');
+  reset.className = 'btn mini';
+  reset.title = t('panel.reset');
+  reset.setAttribute('aria-label', t('panel.reset'));
+  reset.append(iconEl('i-reset'));
+  reset.addEventListener('click', () => {
+    resetStyle();
+    refocusText();
+  });
+  head.append(title, reset);
+  return head;
+}
+
 function syncPropsBar(c = propsContext()) {
   if (!c.type) return;
   const values = propValues(c);
@@ -1068,6 +1119,7 @@ function syncPropsBar(c = propsContext()) {
 
 // ------------------------------------------------------------- préréglages
 // Styles enregistrés par outil, appliqués en un clic (à l'outil et à l'annotation sélectionnée).
+// La catégorie « Mes préréglages » réunit ceux de l'utilisateur, tous outils confondus.
 
 const THUMB_W = 56;
 const THUMB_H = 40;
@@ -1076,36 +1128,15 @@ function currentStyle(c) {
   return pickStyle(c.type, c.shape ?? state.styles[c.type]);
 }
 
-const sameStyle = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-
 function renderPresets(c) {
   const box = $('#presets');
   box.hidden = !c.type;
   if (!c.type) return;
   const list = $('#preset-list');
   list.replaceChildren();
-  for (const preset of state.presets[c.type]) {
-    const item = document.createElement('div');
-    item.className = 'preset';
-    const apply = document.createElement('button');
-    apply.className = 'preset-apply';
-    apply.dataset.id = preset.id;
-    apply.title = t('presets.apply');
-    apply.setAttribute('aria-label', t('presets.apply'));
-    apply.append(presetThumbnail(c.type, preset.style));
-    apply.addEventListener('click', () => {
-      applyPreset(preset);
-      refocusText();
-    });
-    const remove = document.createElement('button');
-    remove.className = 'preset-delete';
-    remove.title = t('presets.delete');
-    remove.setAttribute('aria-label', t('presets.delete'));
-    remove.append(iconEl('i-close'));
-    remove.addEventListener('click', () => deletePreset(c.type, preset.id));
-    item.append(apply, remove);
-    list.append(item);
-  }
+  if (state.presetsView) renderMyPresets(list);
+  else for (const preset of state.presets[c.type]) list.append(presetItem(c.type, preset));
+  // + enregistre le style de l'outil affiché (dans « Mes préréglages », celui des réglages en dessous)
   if (state.presets[c.type].length < MAX_PRESETS) {
     const add = document.createElement('button');
     add.className = 'preset-add';
@@ -1120,21 +1151,65 @@ function renderPresets(c) {
   }
 }
 
+// « Mes préréglages » : ceux de l'utilisateur, tous outils confondus, dans l'ordre de la barre d'outils
+// (la miniature montre l'outil, l'infobulle le nomme).
+function renderMyPresets(list) {
+  for (const tool of Object.keys(TOOLS).filter((tool) => TOOL_PROPS[tool])) {
+    for (const preset of state.presets[tool]) if (preset.custom) list.append(presetItem(tool, preset));
+  }
+  if (!list.children.length) {
+    const empty = document.createElement('p');
+    empty.className = 'presets-empty';
+    empty.textContent = t('presets.empty');
+    list.append(empty);
+  }
+}
+
+function presetItem(tool, preset) {
+  const item = document.createElement('div');
+  item.className = 'preset';
+  const apply = document.createElement('button');
+  apply.className = 'preset-apply';
+  apply.dataset.tool = tool;
+  apply.dataset.id = preset.id;
+  apply.title = state.presetsView ? t('presets.applyTool', { tool: t(`tool.${tool}`) }) : t('presets.apply');
+  apply.setAttribute('aria-label', apply.title);
+  apply.append(presetThumbnail(tool, preset.style));
+  apply.addEventListener('click', () => choosePreset(tool, preset));
+  const remove = document.createElement('button');
+  remove.className = 'preset-delete';
+  remove.title = t('presets.delete');
+  remove.setAttribute('aria-label', t('presets.delete'));
+  remove.append(iconEl('i-close'));
+  remove.addEventListener('click', () => deletePreset(tool, preset.id));
+  item.append(apply, remove);
+  return item;
+}
+
 function syncPresets(c) {
   if (!c.type) return;
   const style = currentStyle(c);
   for (const b of $$('#preset-list .preset-apply')) {
-    const preset = state.presets[c.type].find((p) => p.id === b.dataset.id);
+    const preset = b.dataset.tool === c.type && state.presets[c.type].find((p) => p.id === b.dataset.id);
     b.setAttribute('aria-pressed', String(Boolean(preset) && sameStyle(preset.style, style)));
   }
 }
 
-function applyPreset(preset) {
+// Dans « Mes préréglages », choisir le préréglage d'un autre outil en fait l'outil de dessin.
+function choosePreset(tool, preset) {
+  const focused = document.activeElement?.matches('.preset-apply');
+  if (propsContext().type !== tool) setTool(tool, { presets: state.presetsView });
+  applyPreset(tool, preset);
+  // la liste a pu être reconstruite : le focus reste sur le préréglage choisi
+  if (focused && !textEdit) $(`.preset-apply[data-id="${preset.id}"]`)?.focus();
+  refocusText();
+}
+
+function applyPreset(tool, preset) {
   const c = propsContext();
-  if (!c.type) return;
-  state.styles[c.type] = { ...state.styles[c.type], ...structuredClone(preset.style) };
+  state.styles[tool] = { ...state.styles[tool], ...structuredClone(preset.style) };
   saveStyles();
-  if (c.shape) {
+  if (c.shape?.type === tool) {
     const before = snapshot();
     const prev = JSON.stringify(c.shape);
     Object.assign(c.shape, structuredClone(preset.style));
@@ -1149,11 +1224,15 @@ function addPreset() {
   const c = propsContext();
   if (!c.type) return;
   const style = currentStyle(c);
-  if (state.presets[c.type].some((p) => sameStyle(p.style, style))) {
+  const same = state.presets[c.type].find((p) => sameStyle(p.style, style));
+  if (same?.custom) {
     toast(t('toast.presetExists'));
     return;
   }
-  state.presets[c.type].push({ id: presetId(), style });
+  // un préréglage proposé d'office rejoint simplement « Mes préréglages »
+  if (same) same.custom = true;
+  else if (state.presets[c.type].length < MAX_PRESETS) state.presets[c.type].push({ id: presetId(), style, custom: true });
+  else return;
   savePresets();
   renderPresets(c);
   syncPresets(c);

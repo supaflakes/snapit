@@ -68,6 +68,7 @@ est envoyée pour que le relâchement de `Win` n'ouvre pas le menu Démarrer.
 
 | Touche | Outil |
 | --- | --- |
+| `M` | Mes préréglages : vos préréglages de tous les outils (voir plus bas) |
 | `V` | Sélection (déplacer, redimensionner, flèches du clavier pour ajuster) |
 | `A` | Flèche |
 | `R` / `E` | Rectangle / Ellipse (`Maj` : carré / cercle) |
@@ -101,6 +102,12 @@ Chaque outil mémorise ses réglages d'une session à l'autre ; le bouton ↺ r�
 (à l'outil et à l'annotation sélectionnée). `+` enregistre le style actuel, `×` au survol supprime un préréglage.
 Ils sont conservés d'une capture et d'une session à l'autre.
 
+**Mes préréglages** (★ au début de la barre d'outils, touche `M`) réunit les préréglages que vous avez enregistrés
+avec `+`, tous outils confondus : un clic sur l'un d'eux et l'on dessine directement avec son outil, sans quitter la
+catégorie ni passer d'un outil à l'autre. Les réglages de l'outil choisi restent modifiables en dessous, où `+`
+enregistre le style actuel. Les préréglages proposés d'office restent dans leur outil ; `+` sur l'un d'eux l'ajoute
+à Mes préréglages.
+
 Autres raccourcis : `Ctrl+Z` / `Ctrl+Y` annuler / rétablir, `Suppr` supprimer,
 `Ctrl+C` copier l'image, `Ctrl+S` enregistrer (PNG ou JPEG), `Ctrl+O` ouvrir,
 `Ctrl+V` coller une image, `Ctrl+N` nouvelle capture, `Ctrl+molette` zoom,
@@ -125,7 +132,8 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 ## Développement
 
 - `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, capture plein écran,
-  sélection de zone simulée, annotations, réglages, annuler/rétablir, presse-papiers, bibliothèque et galerie).
+  sélection de zone simulée, annotations, réglages, Mes préréglages, annuler/rétablir, presse-papiers, bibliothèque
+  et galerie).
   Affiche brièvement l'overlay de sélection. Il utilise son propre profil et sa propre bibliothèque
   (dans `%TEMP%\snapit-smoke`) : vos paramètres et vos captures ne sont pas touchés.
 - `npm run icons` : régénère les icônes de `assets/`.
