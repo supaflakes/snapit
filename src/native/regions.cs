@@ -474,6 +474,7 @@ static class Regions
                     result = "{\"id\":" + id + ",\"error\":\"" + e.GetType().Name + "\"}"; // page fermée, mémoire…
                 }
                 Send(result);
+                GC.Collect(); // les captures d'une grande page pèsent des centaines de Mo : rendues à Windows tout de suite
             }) { IsBackground = true };
             scrolling.Start();
         }
@@ -490,13 +491,19 @@ static class Regions
         public readonly int[] Pixels;
         public readonly ulong[] Rows;
         public readonly ulong[][] Bands;
+        public readonly bool[][] Plain; // ligne d'une seule couleur dans la bande (un fond, rien dessus)
 
         public Frame(int[] pixels, int w, int h, int edge, int bands)
         {
             Pixels = pixels;
             Rows = new ulong[h];
             Bands = new ulong[bands][];
-            for (int b = 0; b < bands; b++) Bands[b] = new ulong[h];
+            Plain = new bool[bands][];
+            for (int b = 0; b < bands; b++)
+            {
+                Bands[b] = new ulong[h];
+                Plain[b] = new bool[h];
+            }
             int span = w - 2 * edge;
             for (int y = 0; y < h; y++)
             {
@@ -505,9 +512,16 @@ static class Regions
                 for (int b = 0; b < bands; b++)
                 {
                     ulong hash = 14695981039346656037UL; // FNV-1a
-                    for (int x = edge + span * b / bands, end = edge + span * (b + 1) / bands; x < end; x++)
-                        hash = (hash ^ (uint)pixels[row + x]) * 1099511628211UL;
+                    int start = edge + span * b / bands, color = pixels[row + start];
+                    bool plain = true;
+                    for (int x = start, end = edge + span * (b + 1) / bands; x < end; x++)
+                    {
+                        int pixel = pixels[row + x];
+                        hash = (hash ^ (uint)pixel) * 1099511628211UL;
+                        plain &= pixel == color;
+                    }
                     Bands[b][y] = hash;
+                    Plain[b][y] = plain;
                     whole = (whole ^ hash) * 1099511628211UL;
                 }
                 Rows[y] = whole;
@@ -525,12 +539,15 @@ static class Regions
     // Capture défilante : remonte en haut de l'élément, le fait défiler par pas en capturant la zone, superpose
     // chaque capture à la précédente (au pixel près, d'après le contenu) et n'en garde que la partie nouvelle.
     // Un en-tête ou un pied de page fixes (identiques d'une capture à l'autre) ne sont gardés qu'une fois, la
-    // barre de défilement est retirée. L'élément revient ensuite à sa position de départ.
+    // barre de défilement est retirée. Les autres éléments fixes (barre latérale collante…) ne sont pas répétés :
+    // chaque partie nouvelle commence sous eux, sauf s'ils occupent presque toute la hauteur de la zone.
+    // L'élément revient ensuite à sa position de départ.
     sealed class PageCapture
     {
         const int MAX_HEIGHT = 30000; // pixels : au-delà, l'image serait trop lourde pour l'éditeur
         const long MAX_PIXELS = 80000000;
         const int TIME_BUDGET = 90000; // ms
+        const int STABLE = 150; // ms sans changement pour qu'une capture soit prise
 
         readonly string id;
         readonly AutomationElement element;
@@ -540,6 +557,8 @@ static class Regions
         readonly int bands; // bandes verticales comparées séparément (une barre latérale fixe ne gêne pas les autres)
         readonly int margin; // bas de chaque capture laissé à la suivante (coins arrondis de la fenêtre…)
         readonly int overlap; // hauteur visée commune à deux captures successives
+        readonly int probe; // petit pas, qui laisse voir les éléments fixes presque en entier dans la partie commune
+        readonly bool[] tall; // bandes où un élément fixe occupe presque toute la hauteur : impossible à éviter
         readonly List<Part> parts = new List<Part>();
         readonly double viewport; // hauteur de l'élément : la page en montre VerticalViewSize %
         ScrollPattern pattern;
@@ -563,6 +582,8 @@ static class Regions
             bands = Math.Max(1, Math.Min(6, (w - 2 * edge) / 96));
             margin = Math.Min(h / 10, (int)Math.Ceiling(12 * scale));
             overlap = Math.Max(h / 6, 32);
+            probe = Math.Max(h / 4, 16);
+            tall = new bool[bands];
         }
 
         public string Run(string file)
@@ -571,6 +592,8 @@ static class Regions
             double original = pattern.Current.VerticalScrollPercent;
             var clock = Stopwatch.StartNew();
             int header = int.MaxValue; // en-tête fixe : lignes identiques en haut de toutes les captures
+            int lead = 0; // haut de la partie qui défile, sous l'en-tête fixe, même translucide
+            int fixedBottom = 0; // bas des éléments fixes (en-tête, barre latérale collante…)
             int cut = margin; // bas de la dernière capture laissé à la suivante
             int left = 0, right = 0; // colonnes retirées : barre de défilement
             int end = -1; // position dans la page de la fin de l'image assemblée (-1 : rien encore)
@@ -600,24 +623,42 @@ static class Regions
                         outcome = "interrupted";
                         break;
                     }
-                    // pas visé : la hauteur utile de la capture, moins de quoi superposer les deux captures
-                    int usable = h - (header == int.MaxValue ? 0 : header) - cut;
-                    int wanted = end < 0 ? h * 3 / 5 : Math.Max(usable - overlap, Math.Max(usable / 3, 16));
+                    // pas visé : la hauteur utile de la capture, moins de quoi superposer les deux captures. Le premier,
+                    // petit, laisse voir les éléments fixes ; les lignes nouvelles commencent ensuite sous eux, sauf
+                    // s'il ne reste presque plus de place.
+                    int usable = h - Math.Max(header == int.MaxValue ? 0 : header, lead) - cut;
+                    int wanted = end < 0 ? probe : Math.Max(usable - overlap, Math.Max(usable / 3, 16));
+                    int room = h - cut - fixedBottom - 2 * margin;
+                    if (end >= 0 && room >= Math.Max(h / 10, 32)) wanted = Math.Min(wanted, room);
                     double rate = Math.Max(measured, PixelsPerPercent());
                     if (rate <= 0) break; // l'élément ne défile plus
-                    Frame b = null;
+                    Frame shown = a, b = null;
                     int top = 0, bottom = 0, d = -1;
                     double next = pct;
-                    // défilement trop grand (la page s'est allongée…) : on recommence avec un pas plus petit
-                    for (int attempt = 0; attempt < 4 && d < 0 && !stopScroll; attempt++, wanted /= 2)
+                    for (int attempt = 0; attempt < 5 && d < 0 && !stopScroll; attempt++)
                     {
                         next = Math.Min(100, pct + wanted / rate);
                         pattern.SetScrollPercent(ScrollPattern.NoScroll, next);
-                        b = Settle(a);
+                        b = Settle(shown);
                         if (b == null) break; // arrêt demandé
-                        d = Shift(a, b, (int)Math.Round((next - pct) * rate), out top, out bottom);
+                        shown = b;
+                        d = Shift(a, b, (int)Math.Round((next - pct) * rate), out top, out bottom, out lead);
+                        if (d < 0)
+                        {
+                            wanted /= 2; // défilement trop grand (la page s'est allongée…) : on recommence avec un pas plus petit
+                            continue;
+                        }
+                        if (d == 0) break;
+                        int bottomOfFixed = FixedBottom(a, b, d, bottom);
+                        if (bottomOfFixed < 0)
+                        {
+                            d = -1; // un élément fixe descend plus bas que la partie commune : petit pas pour le voir en entier
+                            wanted = probe;
+                            continue;
+                        }
+                        fixedBottom = bottomOfFixed;
                     }
-                    if (b == null)
+                    if (b == null || (d < 0 && stopScroll))
                     {
                         outcome = "stopped";
                         break;
@@ -640,8 +681,8 @@ static class Regions
                         end = h - bottomCut;
                     }
                     header = Math.Min(header, top);
-                    left = Math.Max(left, EdgeCut(a, b, d, top, bottom, true));
-                    right = Math.Max(right, EdgeCut(a, b, d, top, bottom, false));
+                    left = Math.Max(left, EdgeCut(a, b, d, bottom, true));
+                    right = Math.Max(right, EdgeCut(a, b, d, bottom, false));
                     offset += d;
                     int from = Math.Max(end - offset, header);
                     if (from < h - bottomCut)
@@ -698,9 +739,13 @@ static class Regions
             return total;
         }
 
+        // Seules les lignes gardées sont copiées : les captures entières seraient bien plus lourdes que l'image.
         void Add(Frame f, int from, int to)
         {
-            if (to > from) parts.Add(new Part { Pixels = f.Pixels, From = from, To = to });
+            if (to <= from) return;
+            var pixels = new int[(to - from) * w];
+            Array.Copy(f.Pixels, from * w, pixels, 0, pixels.Length);
+            parts.Add(new Part { Pixels = pixels, From = 0, To = to - from });
         }
 
         Frame Grab()
@@ -725,22 +770,25 @@ static class Regions
         }
 
         // Attend que la zone ait défilé (capture différente de `before`) puis soit stable. null : arrêt demandé.
+        // Stable depuis un moment : Chrome montre parfois d'abord une partie de la page dans un rendu provisoire,
+        // remplacé une ou deux captures plus tard.
         Frame Settle(Frame before)
         {
             var clock = Stopwatch.StartNew();
             Thread.Sleep(50);
             Frame last = Grab();
             bool moved = DifferentRows(last, before) > 0;
+            long changed = clock.ElapsedMilliseconds; // dernier changement vu
             for (;;)
             {
                 if (stopScroll) return null;
                 Thread.Sleep(30);
                 Frame next = Grab();
-                bool stable = DifferentRows(next, last) <= h / 100;
+                long t = clock.ElapsedMilliseconds;
+                if (DifferentRows(next, last) > h / 100) changed = t;
                 moved = moved || DifferentRows(next, before) > 0;
                 last = next;
-                long t = clock.ElapsedMilliseconds;
-                if (moved ? stable : t > 700) return last; // stable, ou rien n'a bougé
+                if (moved ? t - changed >= STABLE : t > 700) return last; // stable, ou rien n'a bougé
                 if (t > 1500) return last; // contenu animé : la capture est prise telle quelle
             }
         }
@@ -753,14 +801,15 @@ static class Regions
         }
 
         // Superpose b à a : décalage d tel que la ligne y de b montre ce que montrait la ligne y + d de a.
-        // Les lignes identiques en haut et en bas des deux captures sont fixes (en-tête, pied de page).
-        // 0 : rien n'a défilé ; -1 : aucun décalage convaincant.
-        int Shift(Frame a, Frame b, int expected, out int top, out int bottom)
+        // Les lignes identiques en haut et en bas des deux captures sont fixes (en-tête, pied de page) ; `lead` :
+        // haut de la partie qui défile. 0 : rien n'a défilé ; -1 : aucun décalage convaincant.
+        int Shift(Frame a, Frame b, int expected, out int top, out int bottom, out int lead)
         {
             top = 0;
             while (top < h && a.Rows[top] == b.Rows[top]) top++;
             bottom = 0;
             while (bottom < h - top && a.Rows[h - 1 - bottom] == b.Rows[h - 1 - bottom]) bottom++;
+            lead = top;
             if (h - top - bottom < 4) return 0;
             int max = h - top - bottom - Math.Max(8, overlap / 3); // assez de lignes communes pour conclure
             if (max < 1) return -1;
@@ -807,31 +856,151 @@ static class Regions
                     best = d;
                 }
             }
-            if (bestScore >= 3.5) return best; // quelques lignes parlantes retrouvées suffisent
-            // peu de lignes parlantes (zones unies) : le défilement demandé, si la plupart des bandes le confirment
-            if (expected < 1 || expected > max) return -1;
-            int rows = h - bottom - expected - top, agree = 0;
+            if (bestScore < 3.5) // sinon, quelques lignes parlantes retrouvées suffisent
+            {
+                // Pas de décalage convaincant : un en-tête fixe translucide (la page défilée transparaît dessous) ne
+                // suit pas le défilement sans être identique d'une capture à l'autre, et pèse trop sur une petite
+                // partie commune. Le défilement demandé (UI Automation est précis) est vérifié en le tolérant.
+                best = -1;
+                bestScore = double.MinValue;
+                for (int d = Math.Max(1, expected - 2); d <= Math.Min(max, expected + 2); d++)
+                {
+                    double score = Confirm(a, b, d, top, bottom, rare);
+                    if (score < 0) continue;
+                    score -= Math.Abs(d - expected) * 1e-6;
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = d;
+                    }
+                }
+            }
+            if (best > 0) lead = Lead(a, b, best, top, bottom, rare);
+            return best;
+        }
+
+        // Vote des bandes sur le décalage d, comme dans Shift, en ignorant dans chaque bande les lignes qui ne suivent
+        // pas le défilement en haut et en bas (au plus un tiers de la hauteur de chaque côté) : en-tête ou bandeau
+        // fixes translucides. Entre les deux, les lignes semblables à l'œil comptent comme identiques (voir Close) ;
+        // pas aux bords, où un en-tête sombre et translucide sur un fond sombre leur ressemblerait. Renvoie son
+        // score, 0 si peu de lignes parlantes mais la plupart des bandes confirment (zones unies), -1 sinon.
+        double Confirm(Frame a, Frame b, int d, int top, int bottom, bool[][] rare)
+        {
+            int stop = h - bottom - d, zone = h / 3, counted = 0, agree = 0;
+            double score = 0;
             for (int k = 0; k < bands; k++)
             {
-                int same = 0;
-                for (int y = top; y < top + rows; y++) if (b.Bands[k][y] == a.Bands[k][y + expected]) same++;
-                if (same >= rows * 0.95) agree++;
+                ulong[] sa = a.Bands[k], sb = b.Bands[k];
+                int first = top, last = stop;
+                while (first < last && first < top + zone && sb[first] != sa[first + d]) first++;
+                while (last > first && last > stop - zone && sb[last - 1] != sa[last - 1 + d]) last--;
+                int found = 0, missed = 0;
+                for (int y = first; y < last; y++)
+                {
+                    if (!Same(a, y + d, b, y, k)) missed++;
+                    else if (rare[k][y + d]) found++;
+                }
+                score += Math.Max(0, found - 3 * missed);
+                if (last - first >= 16)
+                {
+                    counted++;
+                    if (missed <= (last - first) / 20) agree++;
+                }
             }
-            return agree * 2 > bands ? expected : -1;
+            if (score >= 3.5) return score;
+            return agree * 2 > counted ? 0 : -1;
+        }
+
+        bool Same(Frame a, int ya, Frame b, int yb, int k)
+        {
+            return a.Bands[k][ya] == b.Bands[k][yb] || Close(a, ya, b, yb, k);
+        }
+
+        // Lignes semblables à l'œil dans la bande k : même contenu, mais un lissage du texte différent (Chrome passe
+        // une partie de la page du lissage ClearType aux niveaux de gris selon la position de défilement). Ce
+        // lissage déplace la lumière d'un pixel à son voisin : cumulée par groupes de 4 pixels, la luminosité ne
+        // change presque pas, alors qu'une ligne décalée d'un pixel diffère nettement.
+        bool Close(Frame a, int ya, Frame b, int yb, int k)
+        {
+            int span = w - 2 * edge, start = edge + span * k / bands, end = edge + span * (k + 1) / bands;
+            int[] pa = a.Pixels, pb = b.Pixels;
+            int ra = ya * w, rb = yb * w;
+            for (int x = start; x + 4 <= end; x += 4)
+            {
+                int sum = 0;
+                for (int i = x; i < x + 4; i++) sum += Luma(pa[ra + i]) - Luma(pb[rb + i]);
+                if (sum > 4 * 40 * 1000 || sum < -4 * 40 * 1000) return false; // 40 niveaux sur 255 en moyenne
+            }
+            return true;
+        }
+
+        // Luminosité d'un pixel, en millièmes de niveau
+        static int Luma(int pixel)
+        {
+            return ((pixel >> 16) & 0xFF) * 299 + ((pixel >> 8) & 0xFF) * 587 + (pixel & 0xFF) * 114;
+        }
+
+        // Haut de la partie de la page qui défile : première ligne parlante retrouvée à l'identique, sous un
+        // éventuel en-tête fixe (cherchée dans le premier tiers de la zone ; `top` si aucune).
+        int Lead(Frame a, Frame b, int d, int top, int bottom, bool[][] rare)
+        {
+            int stop = Math.Min(h - bottom - d, top + h / 3), lead = stop;
+            for (int k = 0; k < bands; k++)
+                for (int y = top; y < lead; y++)
+                    if (rare[k][y + d] && b.Bands[k][y] == a.Bands[k][y + d])
+                    {
+                        lead = y;
+                        break;
+                    }
+            return lead < stop ? lead : top;
+        }
+
+        // Bas des éléments fixes (en-tête, barre latérale collante…) : dans chaque bande, lignes restées à la même
+        // place alors que la page a défilé dessous. -1 si l'un d'eux descend jusqu'au bas de la partie commune aux
+        // deux captures après un grand pas : on n'en voit pas le bas. Après un petit pas, la bande est désormais
+        // ignorée : l'élément occupe presque toute la hauteur de la zone, on ne peut pas l'éviter.
+        int FixedBottom(Frame a, Frame b, int d, int bottom)
+        {
+            int stop = h - bottom - d, result = 0;
+            for (int k = 0; k < bands; k++)
+            {
+                if (tall[k]) continue;
+                ulong[] sa = a.Bands[k], sb = b.Bands[k];
+                int last = -1;
+                for (int y = 0; y < stop; y++)
+                {
+                    if (sb[y] != sa[y] || sb[y] == sa[y + d]) continue; // la ligne a défilé, ou bouge d'elle-même
+                    // un fond uni, là où un élément fixe (bouton flottant…) cache la ligne suivie dans `a` : c'est
+                    // cet élément-là, plus bas, qui ne suit pas le défilement
+                    if (b.Plain[k][y] && !a.Plain[k][y + d] && sb[y + d] == sa[y + d]) continue;
+                    last = y;
+                }
+                if (last >= stop - margin)
+                {
+                    if (d > probe) return -1;
+                    tall[k] = true;
+                    continue;
+                }
+                result = Math.Max(result, last + 1);
+            }
+            return result;
         }
 
         // Colonnes d'un bord qui ne suivent pas le défilement (le curseur de la barre de défilement se déplace) :
-        // leur nombre, compté depuis le bord.
-        int EdgeCut(Frame a, Frame b, int d, int top, int bottom, bool leftSide)
+        // leur nombre, compté depuis le bord. Seules comptent les lignes où la page, à côté du bord, a suivi le
+        // défilement : pas celles d'un en-tête ou d'une barre latérale fixes.
+        int EdgeCut(Frame a, Frame b, int d, int bottom, bool leftSide)
         {
-            int rows = h - bottom - d - top;
-            if (rows <= 0) return 0;
+            ulong[] sa = a.Bands[leftSide ? 0 : bands - 1], sb = b.Bands[leftSide ? 0 : bands - 1];
+            var rows = new List<int>();
+            for (int y = 0; y < h - bottom - d; y++) if (sb[y] == sa[y + d]) rows.Add(y);
+            if (rows.Count == 0) return 0;
             for (int i = edge - 1; i >= 0; i--) // de l'intérieur vers le bord
             {
                 int x = leftSide ? i : w - 1 - i;
                 int missed = 0;
-                for (int y = top; y < top + rows; y++) if (b.Pixels[y * w + x] != a.Pixels[(y + d) * w + x]) missed++;
-                if (missed > Math.Max(1, rows / 200)) return i + 1;
+                foreach (int y in rows) if (b.Pixels[y * w + x] != a.Pixels[(y + d) * w + x]) missed++;
+                if (missed > Math.Max(1, rows.Count / 200)) return i + 1;
             }
             return 0;
         }

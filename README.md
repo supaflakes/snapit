@@ -53,15 +53,16 @@ qu'on ne voit qu'en faisant défiler :
 
 - Snapit remonte en haut de la page, la fait défiler écran par écran et assemble les captures au pixel près ;
   l'overlay reste affiché avec l'avancement (Windows le retire des captures) et la page défile dessous ;
-- un en-tête ou un pied de page fixes ne sont gardés qu'une fois, la barre de défilement est retirée ;
+- un en-tête ou un pied de page fixes, même translucides, et une barre latérale collante ne sont gardés qu'une
+  fois, la barre de défilement est retirée ;
 - la page revient ensuite là où elle était ;
 - `Échap` arrête la capture en gardant ce qui est déjà capturé.
 
 Le défilement passe par UI Automation (c'est l'assistant des zones qui s'en charge) : le bouton apparaît aussi,
 sous le nom **Capturer toute la zone**, sur les autres zones qui défilent quand l'application les décrit à Windows.
-La capture s'arrête à 30 000 pixels de haut. Comme dans Snagit, ce qui reste fixe à l'écran au milieu de la page
-(bouton flottant, fenêtre posée par-dessus, notification) se répète à chaque écran. Dans l'éditeur, une page très
-haute s'affiche ajustée à la largeur.
+La capture s'arrête à 30 000 pixels de haut. Comme dans Snagit, ce qui reste fixe à l'écran dans le bas de la page
+ou sur presque toute sa hauteur (bouton flottant, barre latérale pleine hauteur, notification) se répète à chaque
+écran. Dans l'éditeur, une page très haute s'affiche ajustée à la largeur.
 
 Par défaut, chaque capture est **copiée dans le presse-papiers** et **enregistrée dans la bibliothèque**
 (voir ci-dessous) ; les deux se désactivent dans les paramètres.
@@ -177,6 +178,10 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
   processus à part par `scripts/smoke-page.js`).
   Affiche brièvement l'overlay de sélection. Il utilise son propre profil et sa propre bibliothèque
   (dans `%TEMP%\snapit-smoke`) : vos paramètres et vos captures ne sont pas touchés.
+- `npm run scroll-test` : capture défilante de pages de test difficiles (en-tête opaque ou translucide, barre
+  latérale collante, barre latérale presque pleine hauteur, bouton flottant), sans overlay ni touches simulées :
+  l'image doit couvrir toute la page, chaque bande à sa place, la barre latérale une seule fois. Images dans
+  `%TEMP%\snapit-scroll-test`.
 - `npm run icons` : régénère les icônes de `assets/`.
 - `npm run dist` : construit l'installateur Windows dans `dist/`.
 - `F12` ouvre les outils de développement (hors version packagée).
