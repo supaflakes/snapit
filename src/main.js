@@ -33,6 +33,10 @@ const LOGIN_ARGS = [HIDDEN_ARG];
 
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp' };
 
+// Windows 10 2004 et suivants savent retirer une fenêtre des captures d'écran (WDA_EXCLUDEFROMCAPTURE) :
+// l'overlay reste alors affiché pendant la capture défilante. Avant, il est masqué le temps de la capture.
+const EXCLUDE_FROM_CAPTURE = process.platform === 'win32' && Number(process.getSystemVersion().split('.')[2]) >= 19041;
+
 let tray = null;
 let quitting = false;
 let balloonShown = false;
@@ -373,16 +377,16 @@ async function startCapture(mode = 'region') {
 }
 
 // Copie la capture dans le presse-papiers et l'enregistre dans la bibliothèque (selon les paramètres),
-// puis l'ouvre dans l'éditeur.
-async function deliverCapture({ image, scaleFactor }) {
+// puis l'ouvre dans l'éditeur. `png` : l'image déjà encodée (capture défilante), `notice` : message à afficher.
+async function deliverCapture({ image, png = image.toPNG(), scaleFactor, notice = null }) {
   const { copyAfterCapture, autoSave } = settings.get();
-  const png = image.toPNG();
   if (copyAfterCapture) await writeClipboardPng(png);
   const payload = {
     dataUrl: `data:image/png;base64,${png.toString('base64')}`,
     scaleFactor,
     name: captureName(),
     copied: copyAfterCapture,
+    notice,
   };
   if (autoSave) {
     try {
@@ -483,6 +487,13 @@ function toImageRect(c, [x, y, w, h]) {
   return x2 - x1 >= 1 && y2 - y1 >= 1 ? [x1, y1, x2 - x1, y2 - y1] : null;
 }
 
+// Pixels de l'image de l'écran -> [x, y, l, h] physique
+function toPhysicalRect(c, [x, y, w, h]) {
+  const sx = c.physical.width / c.size.width;
+  const sy = c.physical.height / c.size.height;
+  return [Math.round(c.physical.x + x * sx), Math.round(c.physical.y + y * sy), Math.round(w * sx), Math.round(h * sy)];
+}
+
 // Fenêtres visibles sur l'écran de `c`. Les sous-fenêtres hors de l'écran restent (à null) : les autres
 // désignent leur parent par son indice.
 function windowsOn(c, windows) {
@@ -502,9 +513,15 @@ function windowsOn(c, windows) {
 
 function selectRegion(captures, windows = null) {
   return new Promise((resolve) => {
-    session = { captures, resolve };
-    globalShortcut.register('Escape', () => endSession(null));
+    session = { captures, resolve, scrolling: false };
+    globalShortcut.register('Escape', cancelSelection);
     const hint = t(windows ? 'overlay.hintDetect' : 'overlay.hint');
+    const labels = {
+      scrollPage: t('overlay.scrollPage'),
+      scrollArea: t('overlay.scrollArea'),
+      scrolling: t('overlay.scrolling'),
+      scrollStop: t('overlay.scrollStop'),
+    };
     const cursor = screen.getCursorScreenPoint();
 
     const shown = captures.map(async (c) => {
@@ -519,6 +536,7 @@ function selectRegion(captures, windows = null) {
       wc.send('overlay:show', {
         dataUrl: `data:image/jpeg;base64,${c.image.toJPEG(92).toString('base64')}`,
         hint,
+        labels,
         regions: windowsOn(c, windows),
         cursor: here ? { x: cursor.x - b.x, y: cursor.y - b.y } : null, // pour mettre en évidence la zone d'emblée
       });
@@ -552,15 +570,23 @@ function endSession(result) {
   resolve(result);
 }
 
+// Échap : annule la sélection. Pendant une capture défilante, l'arrête là : ce qui est capturé est gardé.
+function cancelSelection() {
+  if (session?.scrolling) regions.stopScroll();
+  else endSession(null);
+}
+
 ipcMain.on('overlay:ready', (e) => {
   overlayAcks.get(e.sender.id)?.();
 });
 
-ipcMain.on('overlay:cancel', () => endSession(null));
+ipcMain.on('overlay:cancel', cancelSelection);
+
+const overlayOf = (sender) => [...overlays.values()].find((o) => !o.win.isDestroyed() && o.win.webContents.id === sender.id);
 
 // Capture affichée par l'overlay `sender` pendant la sélection en cours
 function captureOf(sender) {
-  const overlay = [...overlays.values()].find((o) => !o.win.isDestroyed() && o.win.webContents.id === sender.id);
+  const overlay = overlayOf(sender);
   return session?.captures.find((c) => c.display.id === overlay?.displayId) ?? null;
 }
 
@@ -573,11 +599,61 @@ ipcMain.handle('overlay:probe', async (e, { hwnd, x, y }) => {
   const chain = await regions.probe(hwnd, px, py);
   if (!chain || !session) return null;
   return chain
-    .map(([cx, cy, cw, ch, type]) => {
+    .map(([cx, cy, cw, ch, type, scroll]) => {
       const r = toImageRect(capture, [cx, cy, cw, ch]);
-      return r && [...r, String(type)];
+      return r && [...r, String(type), Number.isSafeInteger(scroll) && scroll > 0 ? scroll : 0];
     })
     .filter(Boolean);
+});
+
+// Capture défilante de la zone [x, y, l, h] (pixels de l'image de l'overlay), qui montre l'élément `scroll` :
+// l'assistant fait défiler la page de haut en bas en la capturant, puis assemble les captures. L'overlay reste
+// affiché mais Windows le retire des captures d'écran : la page défile dessous, sans que la souris la survole.
+// Faire défiler la page par UI Automation active sa fenêtre : Échap, raccourci global, arrête la capture.
+// En cas d'échec, seule la partie visible est capturée.
+ipcMain.on('overlay:scroll', async (e, { scroll, x, y, w, h } = {}) => {
+  const capture = captureOf(e.sender);
+  const overlay = overlayOf(e.sender);
+  if (!capture || !overlay || session.scrolling || !Number.isSafeInteger(scroll) || scroll <= 0) return;
+  if (![x, y, w, h].every(Number.isFinite)) return;
+  const { width: W, height: H } = capture.size;
+  const zx = clamp(Math.round(x), 0, W - 1);
+  const zy = clamp(Math.round(y), 0, H - 1);
+  const zone = [zx, zy, clamp(Math.round(w), 1, W - zx), clamp(Math.round(h), 1, H - zy)];
+  session.scrolling = true;
+  const { scaleFactor } = capture.display;
+  const file = path.join(app.getPath('temp'), `snapit-page-${process.pid}-${Date.now()}.png`);
+  const progress = (value) => {
+    if (!e.sender.isDestroyed()) e.sender.send('overlay:scroll-progress', value);
+  };
+  let result = null;
+  try {
+    if (EXCLUDE_FROM_CAPTURE) overlay.win.setContentProtection(true);
+    else overlay.win.hide();
+    await delay(120); // le temps que l'overlay disparaisse des captures
+    const done = await regions.scrollCapture(scroll, toPhysicalRect(capture, zone), scaleFactor, file, progress);
+    if (done) {
+      const png = await fs.readFile(file);
+      const image = nativeImage.createFromBuffer(png);
+      if (!image.isEmpty()) {
+        const notices = {
+          limit: () => t('toast.pageTruncated', { h: image.getSize().height.toLocaleString(lang()) }),
+          interrupted: () => t('toast.scrollIncomplete'),
+        };
+        result = { image, png, scaleFactor, notice: notices[done.end]?.() ?? null };
+      }
+    }
+  } catch {
+    result = null;
+  } finally {
+    fs.rm(file, { force: true }).catch(() => {});
+    if (!overlay.win.isDestroyed()) overlay.win.setContentProtection(false);
+  }
+  endSession(result ?? {
+    image: capture.image.crop({ x: zone[0], y: zone[1], width: zone[2], height: zone[3] }),
+    scaleFactor,
+    notice: t('toast.scrollFailed'),
+  });
 });
 
 // Le clavier (Entrée, flèches, Échap) suit la souris d'un écran à l'autre.

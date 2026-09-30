@@ -49,4 +49,6 @@ contextBridge.exposeInMainWorld('snapit', {
   overlayCancel: () => ipcRenderer.send('overlay:cancel'),
   overlayProbe: (hwnd, x, y) => ipcRenderer.invoke('overlay:probe', { hwnd, x, y }),
   overlayFocus: () => ipcRenderer.send('overlay:focus'),
+  overlayScroll: (zone) => ipcRenderer.send('overlay:scroll', zone),
+  onOverlayScrollProgress: (callback) => ipcRenderer.on('overlay:scroll-progress', (_e, value) => callback(value)),
 });

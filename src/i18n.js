@@ -34,6 +34,10 @@
       'capture.name': 'Capture {date} à {time}',
       'overlay.hint': 'Glissez pour capturer une zone  ·  Clic : écran entier  ·  Échap : annuler',
       'overlay.hintDetect': 'Clic : capturer la zone en surbrillance  ·  Glisser : zone libre  ·  Molette : zone plus grande ou plus petite  ·  Échap : annuler',
+      'overlay.scrollPage': 'Capturer toute la page',
+      'overlay.scrollArea': 'Capturer toute la zone',
+      'overlay.scrolling': 'Capture défilante…',
+      'overlay.scrollStop': 'Échap : arrêter ici et garder ce qui est capturé',
 
       // Éditeur
       'editor.capture': 'Capturer',
@@ -204,6 +208,9 @@
       'toast.captureDeleted': 'Capture placée dans la corbeille',
       'toast.deleteFailed': 'La capture n’a pas pu être supprimée.',
       'toast.autosaveFailed': 'L’enregistrement automatique de la capture a échoué.',
+      'toast.scrollFailed': 'La capture défilante a échoué : seule la partie visible a été capturée.',
+      'toast.pageTruncated': 'Page très longue : la capture s’arrête à {h} pixels de haut.',
+      'toast.scrollIncomplete': 'La capture défilante s’est arrêtée avant le bas de la page.',
 
       // Paramètres
       'settings.title': 'Paramètres',
@@ -241,7 +248,7 @@
       'settings.seconds': 'secondes',
       'settings.copyAfter': 'Copier automatiquement chaque capture dans le presse-papiers',
       'settings.detectRegions': 'Détecter les fenêtres et les zones sous la souris',
-      'settings.detectRegionsHelp': 'Pendant la sélection, la fenêtre, la page web ou l’élément survolé se met en surbrillance et se capture d’un clic ; la molette passe à une zone plus grande ou plus petite.',
+      'settings.detectRegionsHelp': 'Pendant la sélection, la fenêtre, la page web ou l’élément survolé se met en surbrillance et se capture d’un clic ; la molette passe à une zone plus grande ou plus petite. Sur une page web, « Capturer toute la page » la capture jusqu’en bas, en la faisant défiler.',
       'settings.library': 'Bibliothèque de captures',
       'settings.autoSave': 'Enregistrer automatiquement chaque capture',
       'settings.autoSaveHelp': 'L’image et toutes vos annotations sont enregistrées dans le dossier ci-dessous, puis mises à jour à chaque modification.',
@@ -295,6 +302,10 @@
       'capture.name': 'Capture {date} at {time}',
       'overlay.hint': 'Drag to capture a region  ·  Click: full screen  ·  Esc: cancel',
       'overlay.hintDetect': 'Click: capture the highlighted area  ·  Drag: free region  ·  Scroll: larger or smaller area  ·  Esc: cancel',
+      'overlay.scrollPage': 'Capture the whole page',
+      'overlay.scrollArea': 'Capture the whole area',
+      'overlay.scrolling': 'Scrolling capture…',
+      'overlay.scrollStop': 'Esc: stop here and keep what was captured',
 
       'editor.capture': 'Capture',
       'editor.captureTip': 'Capture region (Ctrl+N)',
@@ -464,6 +475,9 @@
       'toast.captureDeleted': 'Capture moved to the Recycle Bin',
       'toast.deleteFailed': 'The capture could not be deleted.',
       'toast.autosaveFailed': 'Automatic saving of the capture failed.',
+      'toast.scrollFailed': 'The scrolling capture failed: only the visible part was captured.',
+      'toast.pageTruncated': 'Very long page: the capture stops at {h} pixels high.',
+      'toast.scrollIncomplete': 'The scrolling capture stopped before the bottom of the page.',
 
       'settings.title': 'Settings',
       'settings.general': 'General',
@@ -500,7 +514,7 @@
       'settings.seconds': 'seconds',
       'settings.copyAfter': 'Automatically copy each capture to the clipboard',
       'settings.detectRegions': 'Detect windows and areas under the mouse',
-      'settings.detectRegionsHelp': 'While selecting, the window, web page or element under the mouse is highlighted and captured with a click; scroll to switch to a larger or smaller area.',
+      'settings.detectRegionsHelp': 'While selecting, the window, web page or element under the mouse is highlighted and captured with a click; scroll to switch to a larger or smaller area. On a web page, “Capture the whole page” captures it all the way down by scrolling it.',
       'settings.library': 'Capture library',
       'settings.autoSave': 'Automatically save every capture',
       'settings.autoSaveHelp': 'The image and all your annotations are saved to the folder below, then updated whenever you edit them.',

@@ -308,6 +308,7 @@ async function loadImage({ dataUrl, scaleFactor = 1, name, libraryId = null, sha
   api?.setDocument({ hasImage: true, libraryId });
   setDirty(false);
   layout();
+  stage.scrollTo(0, 0); // une page entière s'affiche depuis son haut
   requestRender();
   updateButtons();
   renderPropsBar();
@@ -500,8 +501,12 @@ function fitScale() {
   const dpr = window.devicePixelRatio || 1;
   const w = Math.max(50, stage.clientWidth - pad);
   const h = Math.max(50, stage.clientHeight - pad);
+  const { width, height } = state.base;
+  const whole = Math.min(w / width, h / height);
+  // Page entière (capture défilante) : en entier, elle ne serait qu'une bande illisible ; on l'ajuste à la largeur.
+  const scale = height > width && whole * width < w / 3 ? w / width : whole;
   // Ne jamais agrandir au-delà de la taille réelle (1 pixel d'image = 1 pixel physique).
-  return Math.min(w / state.base.width, h / state.base.height, 1 / dpr);
+  return Math.min(scale, 1 / dpr);
 }
 
 function layout() {

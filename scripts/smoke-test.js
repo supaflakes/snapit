@@ -1,11 +1,11 @@
 // Test de fumée de bout en bout : lance l'application, fait une capture plein écran,
 // une capture de zone (souris simulée dans l'overlay), dessine des annotations,
-// vérifie la bibliothèque et la galerie, puis enregistre des images de contrôle.
+// vérifie la bibliothèque et la galerie, fait une capture défilante, puis enregistre des images de contrôle.
 // Usage : npm run smoke   (dossier de sortie : SNAPIT_SMOKE_OUT ou %TEMP%\snapit-smoke)
 'use strict';
 
 const { app, BrowserWindow, clipboard, nativeImage, screen } = require('electron');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -127,6 +127,132 @@ async function until(win, expression, timeout = 4000) {
     await wait(100);
   }
   return false;
+}
+
+// Page de test dans un autre processus (scripts/smoke-page.js), comme un vrai navigateur :
+// `ready` une fois affichée, `hwnd` sa fenêtre, `scrollY` sa dernière position de défilement connue.
+function openTestPage(file, { x, y, width, height }, scrollY) {
+  const child = spawn(process.execPath, [path.join(__dirname, 'smoke-page.js'), file, ...[x, y, width, height, scrollY].map(String)], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const page = { hwnd: null, scrollY: null, close: () => child.kill() };
+  page.ready = new Promise((resolve) => {
+    let buffer = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      let i;
+      while ((i = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, i).trim();
+        buffer = buffer.slice(i + 1);
+        if (line.startsWith('ready ')) {
+          page.hwnd = Number(line.slice(6));
+          resolve(true);
+        } else if (line.startsWith('scrollY ')) {
+          page.scrollY = Number(line.slice(8));
+        }
+      }
+    });
+    child.on('exit', () => resolve(false));
+  });
+  return page;
+}
+
+async function scrollingCapture() {
+  const primary = screen.getPrimaryDisplay();
+  const sf = primary.scaleFactor;
+  const HEADER = 50;
+  const BAND = 150;
+  const BANDS = 16;
+  const bands = Array.from({ length: BANDS }, (_, i) =>
+    `<div style="height:${BAND}px;background:hsl(${(i * 47) % 360},70%,${i % 2 ? 40 : 70}%)"><p style="margin:0;padding:24px 0 0 220px">Bande ${i} : du texte pour superposer les captures</p></div>`,
+  ).join('');
+  const file = path.join(OUT, 'page-defilante.html');
+  fs.writeFileSync(file, `<!doctype html><meta charset="utf-8"><body style="margin:0;font:18px sans-serif"><div style="position:sticky;top:0;height:${HEADER}px;background:#0f172a;color:#fff;padding-left:220px;line-height:${HEADER}px">En-tête fixe</div>${bands}</body>`);
+  const target = openTestPage(file, { x: primary.bounds.x + 260, y: primary.bounds.y + 160, width: 700, height: 480 }, 400);
+  const opened = await Promise.race([target.ready, wait(15000)]);
+  if (!opened) {
+    check('capture défilante : page de test ouverte', false);
+    target.close();
+    return;
+  }
+  await wait(600);
+
+  const pending = snapit.startCapture('region');
+  let overlayWin = null;
+  for (let i = 0; i < 60 && !overlayWin; i++) {
+    await wait(50);
+    overlayWin = BrowserWindow.getAllWindows().find(
+      (w) => w.isVisible() && w.webContents.getURL().includes('/overlay/') && screen.getDisplayMatching(w.getBounds()).id === primary.id,
+    );
+  }
+  let button = null;
+  let under = null;
+  if (overlayWin) {
+    // survole la page jusqu'à ce que le bouton apparaisse (les éléments de la page arrivent après la fenêtre)
+    for (let i = 0; i < 30 && !button; i++) {
+      overlayWin.webContents.sendInputEvent({ type: 'mouseMove', x: 610 + (i % 2), y: 380 });
+      await wait(120);
+      button = await overlayWin.webContents.executeJavaScript('scrollButton && [scrollButton.x, scrollButton.y, scrollButton.w, scrollButton.h]');
+    }
+    // on ne clique que sur la page de test, jamais sur une fenêtre passée devant elle
+    under = await overlayWin.webContents.executeJavaScript('windows?.find((w) => contains(w.frame, toImagePoint(mouse)))?.hwnd ?? null');
+  }
+  const ours = under === target.hwnd;
+  check('capture défilante : le bouton « Capturer toute la page » apparaît sur la page', Boolean(button) && ours, ours ? '' : 'page de test masquée par une autre fenêtre');
+  if (!button || !ours) {
+    if (overlayWin) await key(overlayWin, 'Escape');
+    await pending;
+    target.close();
+    return;
+  }
+  const bx = Math.round(button[0] + button[2] / 2);
+  const by = Math.round(button[1] + button[3] / 2);
+  const wc = overlayWin.webContents;
+  wc.sendInputEvent({ type: 'mouseMove', x: bx, y: by });
+  await wait(100);
+  await savePage(overlayWin, '6-bouton-page-entiere.png');
+  wc.sendInputEvent({ type: 'mouseDown', x: bx, y: by, button: 'left', clickCount: 1 });
+  wc.sendInputEvent({ type: 'mouseUp', x: bx, y: by, button: 'left', clickCount: 1 });
+  await wait(400);
+  await savePage(overlayWin, '6-capture-defilante.png');
+  await pending;
+
+  let editor = null;
+  for (let i = 0; i < 40 && !editor; i++) {
+    await wait(100);
+    for (const win of editorWindows()) {
+      if (await win.webContents.executeJavaScript('typeof state !== "undefined" && Boolean(state.base && state.base.height > 1000)')) editor = win;
+    }
+  }
+  check('capture défilante : la page entière s’ouvre dans l’éditeur', Boolean(editor));
+  if (editor) {
+    await wait(300);
+    await savePage(editor, '6-page-entiere.png');
+    // couleur de l'image assemblée à un point donné, en pixels CSS de la page
+    const [width, height, samples] = await editor.webContents.executeJavaScript(`(() => {
+      const c = state.base.getContext('2d');
+      const at = (x, y) => Array.from(c.getImageData(Math.round(x * ${sf}), Math.round(y * ${sf}), 1, 1).data.slice(0, 3)).join(',');
+      const bands = [];
+      for (let i = 0; i < ${BANDS}; i++) {
+        const top = ${HEADER} + ${BAND} * i;
+        bands.push({ above: at(20, top - 3), below: at(20, top + 3), low: at(20, top + ${BAND} * 0.7), bottom: at(20, top + ${BAND} - 4) });
+      }
+      return [state.base.width, state.base.height, { header: at(20, ${HEADER} / 2), bands }];
+    })()`);
+    const expected = Math.round((HEADER + BAND * BANDS) * sf);
+    check('capture défilante : hauteur de la page entière', Math.abs(height - expected) <= 2, `${width}×${height}, attendu ${expected} de haut`);
+    check('capture défilante : sans la barre de défilement', width < 700 * sf && width > 700 * sf - 40 * sf, `${width} px de large`);
+    const { header, bands: found } = samples;
+    // chaque bande commence à sa place (pas de décalage ni de doublon), d'une couleur unie, et l'en-tête fixe n'apparaît qu'en haut
+    const placed = found.every((b, i) => b.below === b.low && b.low === b.bottom && (i === 0 ? b.above === header : b.above === found[i - 1].low));
+    const distinct = found.every((b, i) => i === 0 || b.low !== found[i - 1].low) && found.every((b) => b.low !== header);
+    check('capture défilante : bandes assemblées à leur place, en-tête fixe une seule fois', placed && distinct, JSON.stringify(found.slice(0, 3)));
+    editor.close();
+  }
+  await wait(300);
+  check('capture défilante : la page revient à sa position', Math.abs(target.scrollY - 400) <= 1, `scrollY = ${target.scrollY}`);
+  target.close();
 }
 
 app.whenReady().then(async () => {
@@ -442,6 +568,10 @@ app.whenReady().then(async () => {
       const leftovers = fs.readdirSync(path.join(LIBRARY, '.snapit')).filter((name) => name.endsWith('.tmp'));
       check('aucun fichier temporaire laissé dans la bibliothèque', leftovers.length === 0, leftovers.join(', '));
     }
+
+    // 6. Capture défilante : sur une page qui défile, « Capturer toute la page » la capture de haut en bas
+    // (en-tête fixe gardé une seule fois, sans barre de défilement), puis la page revient là où elle était
+    if (regions.child) await scrollingCapture();
   } catch (err) {
     check('exécution sans erreur', false, err.stack);
   }

@@ -42,8 +42,26 @@ sont gérés.
 La détection repose sur un second petit assistant (`src/native/regions.cs`), compilé comme celui du clavier : au
 moment de la capture, il relève la position des fenêtres visibles et de leurs sous-fenêtres, puis, sous la souris,
 celle des éléments d'interface grâce à UI Automation (l'interface d'accessibilité de Windows). Il ne lit que des
-positions et des types d'éléments, jamais de texte ni de contenu. L'option « Détecter les fenêtres et les zones sous
-la souris » des paramètres la désactive : un clic capture alors l'écran entier, comme avant.
+positions et des types d'éléments, jamais de texte. L'option « Détecter les fenêtres et les zones sous la souris »
+des paramètres la désactive : un clic capture alors l'écran entier, comme avant.
+
+### Capturer toute la page (capture défilante)
+
+Comme dans Snagit, quand la souris survole une page web qui défile (Chrome, Edge…), un bouton
+**Capturer toute la page** apparaît en bas de la page. Un clic la capture en entier, jusqu'en bas, y compris ce
+qu'on ne voit qu'en faisant défiler :
+
+- Snapit remonte en haut de la page, la fait défiler écran par écran et assemble les captures au pixel près ;
+  l'overlay reste affiché avec l'avancement (Windows le retire des captures) et la page défile dessous ;
+- un en-tête ou un pied de page fixes ne sont gardés qu'une fois, la barre de défilement est retirée ;
+- la page revient ensuite là où elle était ;
+- `Échap` arrête la capture en gardant ce qui est déjà capturé.
+
+Le défilement passe par UI Automation (c'est l'assistant des zones qui s'en charge) : le bouton apparaît aussi,
+sous le nom **Capturer toute la zone**, sur les autres zones qui défilent quand l'application les décrit à Windows.
+La capture s'arrête à 30 000 pixels de haut. Comme dans Snagit, ce qui reste fixe à l'écran au milieu de la page
+(bouton flottant, fenêtre posée par-dessus, notification) se répète à chaque écran. Dans l'éditeur, une page très
+haute s'affiche ajustée à la largeur.
 
 Par défaut, chaque capture est **copiée dans le presse-papiers** et **enregistrée dans la bibliothèque**
 (voir ci-dessous) ; les deux se désactivent dans les paramètres.
@@ -155,7 +173,8 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 
 - `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, détection des fenêtres et des
   éléments de page, capture plein écran, sélection de zone simulée, annotations, réglages, Mes préréglages,
-  annuler/rétablir, presse-papiers, bibliothèque et galerie).
+  annuler/rétablir, presse-papiers, bibliothèque et galerie, capture défilante d'une page de test ouverte dans un
+  processus à part par `scripts/smoke-page.js`).
   Affiche brièvement l'overlay de sélection. Il utilise son propre profil et sa propre bibliothèque
   (dans `%TEMP%\snapit-smoke`) : vos paramètres et vos captures ne sont pas touchés.
 - `npm run icons` : régénère les icônes de `assets/`.
@@ -172,10 +191,12 @@ src/main.js            processus principal : zone de notification, capture, fen�
 src/settings.js        paramètres de l'application (settings.json)
 src/library.js         bibliothèque des captures (enregistrement automatique, galerie)
 src/hotkeys.js         raccourcis globaux et assistant clavier
-src/regions.js         détection des fenêtres et des éléments d'interface pour la sélection de zone
+src/regions.js         détection des fenêtres et des éléments d'interface pour la sélection de zone,
+                       capture défilante
 src/native/helper.js   compilation des assistants natifs (compilateur C# fourni avec Windows)
 src/native/keyhook.cs  assistant clavier (hook bas niveau) pour Impr. écran
-src/native/regions.cs  assistant de détection : fenêtres, sous-fenêtres, éléments UI Automation
+src/native/regions.cs  assistant de détection : fenêtres, sous-fenêtres, éléments UI Automation ;
+                       capture défilante (défilement, captures, assemblage)
 src/i18n.js            traductions français / anglais, partagées par toutes les fenêtres
 src/theme.css          couleurs des thèmes sombre et clair
 src/preload.js         pont IPC exposé aux pages (contextIsolation + sandbox)
