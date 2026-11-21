@@ -1,5 +1,5 @@
-// Pont `window.snapit` de la version Tauri : la même API que src/preload.js (Electron), pour que l'éditeur,
-// les paramètres et l'overlay fonctionnent sans changement. Injecté dans chaque page avant ses scripts.
+// Pont `window.snapit` de la version Tauri : la même API que src/preload.js (Electron), pour que l'éditeur
+// et les paramètres fonctionnent sans changement. Injecté dans chaque page avant ses scripts.
 (() => {
   'use strict';
   if (window.snapit) return;
@@ -74,16 +74,6 @@
     startRecording: () => send('shortcuts_record_start'),
     stopRecording: () => send('shortcuts_record_stop'),
     onRecorded: (callback) => on('shortcuts:recorded', callback),
-
-    // Sélection de zone
-    onOverlayShow: (callback) => on('overlay:show', callback),
-    onOverlayReset: (callback) => on('overlay:reset', () => callback()),
-    overlayReady: () => send('overlay_ready'),
-    overlaySelect: (rect) => send('overlay_select', { rect }),
-    overlayCancel: () => send('overlay_cancel'),
-    overlayProbe: (hwnd, x, y) => invoke('overlay_probe', { hwnd, x, y }),
-    overlayFocus: () => send('overlay_focus'),
-    overlayScroll: (zone) => send('overlay_scroll', { zone }),
-    onOverlayScrollProgress: (callback) => on('overlay:scroll-progress', callback),
+    // la sélection de zone est native (src-tauri/src/overlay.rs) : rien à fournir à src/overlay
   });
 })();

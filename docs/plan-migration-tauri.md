@@ -252,6 +252,50 @@ flottant) n'ont pas encore été portées dans l'autotest Rust.
 
 *Résultat : overlay affiché sans délai perceptible après le raccourci.*
 
+**Faite dans la version Tauri (21/11/2026)** : `overlay.rs` remplace la page `src/overlay` (gardée pour la version
+Electron).
+
+- **Fenêtres :** une fenêtre Win32 par écran, de style « outil » dès sa création (plus de style réécrit par Tauri).
+  Toutes vivent sur un fil dédié, avec sa propre boucle de messages : l'affichage ne dépend ni de la boucle de Tauri
+  ni de WebView2.
+- **Dessin :** Direct2D et DirectWrite, à la résolution physique de l'écran. L'image capturée est envoyée telle
+  quelle à la carte graphique : plus d'aperçu JPEG à encoder (12 ms), ni de page à charger et à décoder.
+- **Apparence :** la logique et les dessins d'`overlay.js` sont transcrits à l'identique : mêmes couleurs, arrondis,
+  police (Segoe UI Variable), loupe, réticule, bouton « Capturer toute la page » et panneau d'avancement. Seule
+  différence : les ombres floues du canvas sont imitées par des rectangles arrondis superposés.
+- **Affichage sans éclair :** la fenêtre est affichée masquée par DWM (« cloaking »), dessinée, puis démasquée.
+  Aucune image précédente ni fond noir n'apparaît.
+- **Clavier :** l'overlay prend le premier plan comme le faisait Tauri, avec une touche neutre si Windows le refuse.
+- **Mémoire :** l'image de l'écran est libérée à la fin de chaque sélection. Les surfaces de dessin sont libérées
+  après 2 minutes sans capture ; les fenêtres, très légères, restent prêtes.
+- **Autotest :** 31 vérifications. Les nouvelles :
+  - l'overlay reçoit le clavier ;
+  - son rendu correspond à la capture, pixel pour pixel, assombrie hors de la zone en surbrillance ;
+  - une zone tracée à la souris (messages envoyés à la fenêtre) donne la bonne taille ;
+  - sur la page de test, le bouton « Capturer toute la page » apparaît au survol, et un clic dessus ouvre la page
+    entière dans l'éditeur.
+
+Mesures (`npm run tauri:measure`), comparées à la version d'avant la phase 5, sur la même machine :
+
+| | Avant | Après |
+| --- | --- | --- |
+| Raccourci → overlay, aucune fenêtre de Snapit à l'écran | 82 ms | **30 ms** |
+| Raccourci → overlay, éditeur affiché (capture GDI) | 133 ms | **84 ms** |
+| Première sélection après le démarrage | 286 ms | 135 ms |
+| Capture plein écran → éditeur | 171 ms | 157 ms |
+| Mémoire juste après des captures, éditeur fermé | 525 Mo | **167 Mo** |
+| Mémoire au repos (2 minutes sans capture) | 118 Mo, dont 80 Mo privés | 122 Mo, dont 82 Mo privés |
+
+Avec l'éditeur affiché, le délai vient surtout de la capture GDI (environ 70 ms), nécessaire tant qu'une fenêtre de
+Snapit est à l'écran (voir la phase 2).
+
+Non vérifié :
+
+- plusieurs écrans et échelles mixtes (passage du clavier d'un écran à l'autre, sélection à cheval) ;
+- souris et clavier réels : l'autotest envoie des messages à la fenêtre. La molette, les flèches, Entrée et le clic
+  droit ne sont pas testés automatiquement ;
+- rendu sur un écran HDR ou tourné, et après une réinitialisation de la carte graphique (surfaces recréées).
+
 ### Phase 6 — Finitions
 
 - Miniatures et encodage PNG/JPEG en Rust.

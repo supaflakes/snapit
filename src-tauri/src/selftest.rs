@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
-use crate::{app, capture, editors, images, win};
+use crate::{app, capture, editors, images, overlay, win};
 
 static REPORT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static FAILURES: Mutex<u32> = Mutex::new(0);
@@ -111,8 +111,22 @@ fn screenshot(name: &str) {
     }
 }
 
-fn visible_overlay() -> Option<tauri::WebviewWindow> {
-    app().handle.webview_windows().into_iter().find(|(l, w)| l.starts_with("overlay-") && w.is_visible().unwrap_or(false)).map(|(_, w)| w)
+fn visible_overlay() -> Option<(usize, [i32; 4], isize)> {
+    overlay::visible()
+}
+
+// Souris simulée dans l'overlay : messages envoyés à sa fenêtre, en pixels physiques de la fenêtre.
+fn post_mouse(hwnd: isize, msg: u32, x: i32, y: i32) {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+    let lparam = (((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff)) as isize;
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd as _)), msg, WPARAM(0), LPARAM(lparam));
+    }
+}
+
+fn foreground() -> isize {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as isize }
 }
 
 fn capturing() -> bool {
@@ -178,44 +192,47 @@ pub fn start() {
         check("enregistrer un raccourci : Maj+Impr. écran", recorded && value == "Shift+PrintScreen", value);
         check("aucune capture pendant l'enregistrement", visible_overlay().is_none() && !capturing(), "");
 
-        // Aperçu JPEG de l'overlay : même taille et mêmes couleurs que la capture
-        if let Ok(Some(m)) = app().handle.primary_monitor() {
-            let (p, s) = (m.position(), m.size());
-            let bgra = win::grab_screen(p.x, p.y, s.width as i32, s.height as i32).unwrap_or_default();
-            let jpeg = win::encode_jpeg_wic(&bgra, s.width, s.height, 0.92).unwrap_or_default();
-            let decoded = image::load_from_memory(&jpeg).map(|i| i.to_rgb8());
-            let (same_size, diff) = match &decoded {
-                Ok(img) => {
-                    let mut total = 0u64;
-                    let mut n = 0u64;
-                    for y in (0..s.height).step_by(37) {
-                        for x in (0..s.width).step_by(41) {
-                            let o = ((y * s.width + x) * 4) as usize;
-                            let px = img.get_pixel(x, y);
-                            for (a, b) in [(px[0], bgra[o + 2]), (px[1], bgra[o + 1]), (px[2], bgra[o])] {
-                                total += (a as i32 - b as i32).unsigned_abs() as u64;
-                                n += 1;
-                            }
-                        }
-                    }
-                    (img.width() == s.width && img.height() == s.height, total as f64 / n.max(1) as f64)
-                }
-                Err(_) => (false, f64::MAX),
-            };
-            check("aperçu de l'overlay fidèle à la capture", same_size && diff < 6.0, format!("écart moyen {diff:.1} par canal, {} Ko", jpeg.len() / 1024));
-        }
-
-        // 1. Zone : sélection simulée dans l'overlay
+        // 1. Zone : sélection tracée à la souris dans l'overlay
         tauri::async_runtime::spawn(async { capture::start_capture("region", false).await });
         let overlay = until(Duration::from_secs(5), || visible_overlay().is_some()).await;
         check("l'overlay de sélection s'affiche", overlay, "");
         tokio::time::sleep(Duration::from_millis(600)).await;
         screenshot("1-overlay.png");
-        if let Some(w) = visible_overlay() {
-            let size = w.inner_size().unwrap_or_default();
-            let m = w.current_monitor().ok().flatten().map(|m| *m.size()).unwrap_or_default();
-            check("l'overlay couvre l'écran", size == m, format!("{}×{} pour un écran de {}×{}", size.width, size.height, m.width, m.height));
-            capture::select(w.label(), &json!({ "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3 }));
+        if let Some((index, [ox, oy, ow, oh], hwnd)) = visible_overlay() {
+            let m = app().handle.primary_monitor().ok().flatten().map(|m| *m.size()).unwrap_or_default();
+            check("l'overlay couvre l'écran", ow as u32 == m.width && oh as u32 == m.height, format!("{ow}×{oh} pour un écran de {}×{}", m.width, m.height));
+            check("l'overlay reçoit le clavier", foreground() == hwnd, "");
+            // À l'écran : l'image capturée, pixel pour pixel, assombrie hors de la zone en surbrillance
+            if let (Some(c), Ok(shown)) = (capture::capture_at(index), win::grab_screen(ox, oy, ow, oh)) {
+                let (mut same, mut dimmed, mut total) = (0u32, 0u32, 0u32);
+                for y in (0..oh as usize).step_by(37) {
+                    for x in (0..ow as usize).step_by(41) {
+                        let o = (y * ow as usize + x) * 4;
+                        let close = |expected: [f64; 3]| (0..3).all(|k| (shown[o + k] as f64 - expected[k]).abs() <= 3.0);
+                        let src = [c.bgra[o] as f64, c.bgra[o + 1] as f64, c.bgra[o + 2] as f64];
+                        total += 1;
+                        if close(src) {
+                            same += 1;
+                        } else if close([src[0] * 0.5 + 5.0, src[1] * 0.5 + 3.0, src[2] * 0.5 + 3.0]) {
+                            dimmed += 1;
+                        }
+                    }
+                }
+                check(
+                    "l'overlay affiche l'image capturée, pixel pour pixel",
+                    (same + dimmed) * 100 >= total * 93,
+                    format!("{same} pixel(s) identiques et {dimmed} assombris sur {total}"),
+                );
+            }
+            let at = |fx: f64, fy: f64| ((ow as f64 * fx).round() as i32, (oh as f64 * fy).round() as i32);
+            let ((x1, y1), (x2, y2)) = (at(0.1, 0.1), at(0.4, 0.4));
+            post_mouse(hwnd, 0x0200, x1, y1); // WM_MOUSEMOVE
+            post_mouse(hwnd, 0x0201, x1, y1); // WM_LBUTTONDOWN
+            post_mouse(hwnd, 0x0200, (x1 + x2) / 2, (y1 + y2) / 2);
+            post_mouse(hwnd, 0x0200, x2, y2);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            screenshot("1b-overlay-zone-tracee.png");
+            post_mouse(hwnd, 0x0202, x2, y2); // WM_LBUTTONUP
         }
         until(Duration::from_secs(5), || !capturing()).await;
         let opened = until(Duration::from_secs(5), || editor_with_image().is_some_and(|(_, id)| id.is_some())).await;
@@ -408,18 +425,27 @@ async fn scroll_test() {
             let before = app().library.lock().unwrap().list(&crate::library_folder()).len();
             tauri::async_runtime::spawn(async { capture::start_capture("region", false).await });
             let shown = until(Duration::from_secs(5), || visible_overlay().is_some()).await;
-            if let (true, Some(overlay)) = (shown, visible_overlay()) {
+            if let (true, Some((index, [ox, oy, _, _], overlay))) = (shown, visible_overlay()) {
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                let origin = m.position();
-                let (ix, iy) = (x - origin.x as f64, y - origin.y as f64);
-                let chain = capture::probe(overlay.label(), hwnd, ix, iy).await;
-                let zone = chain.as_array().and_then(|c| c.iter().rev().find(|e| e[5].as_i64().unwrap_or(0) > 0).cloned());
-                check("overlay : la page qui défile est proposée", zone.is_some(), chain.to_string());
-                if let Some(z) = zone {
+                // la souris passe sur la page : l'overlay cherche ce qui est dessous et propose le bouton
+                let (ix, iy) = ((x - ox as f64).round() as i32, (y - oy as f64).round() as i32);
+                let mut button = None;
+                let started = Instant::now();
+                while button.is_none() && started.elapsed() < Duration::from_secs(5) {
+                    post_mouse(overlay, 0x0200, ix, iy);
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    button = overlay::scroll_button(index).await;
+                }
+                check("overlay : le bouton « Capturer toute la page » apparaît sur la page", button.is_some(), format!("{} ms", started.elapsed().as_millis()));
+                screenshot("7-overlay-page.png");
+                if let Some([bx, by, bw, bh]) = button {
+                    let (cx, cy) = ((bx + bw / 2.0).round() as i32, (by + bh / 2.0).round() as i32);
                     let started = Instant::now();
-                    capture::scroll(overlay.clone(), json!({ "scroll": z[5], "x": z[0], "y": z[1], "w": z[2], "h": z[3] })).await;
+                    post_mouse(overlay, 0x0200, cx, cy);
+                    post_mouse(overlay, 0x0201, cx, cy);
+                    post_mouse(overlay, 0x0202, cx, cy);
+                    until(Duration::from_secs(20), || !capturing()).await;
                     let elapsed = started.elapsed();
-                    until(Duration::from_secs(10), || !capturing()).await;
                     let list = app().library.lock().unwrap().list(&crate::library_folder());
                     let expected = ((HEADER + BAND * BANDS as f64) * sf).round();
                     let height = list.first().and_then(|i| i["height"].as_f64()).unwrap_or(0.0);

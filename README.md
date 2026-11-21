@@ -212,7 +212,8 @@ src/native/regions.cs  assistant de détection : fenêtres, sous-fenêtres, él�
 src/i18n.js            traductions français / anglais, partagées par toutes les fenêtres
 src/theme.css          couleurs des thèmes sombre et clair
 src/preload.js         pont IPC exposé aux pages (contextIsolation + sandbox)
-src/overlay/           sélection de zone plein écran (une fenêtre par écran)
+src/overlay/           sélection de zone plein écran (une fenêtre par écran) ; la version Tauri la
+                       dessine en natif (src-tauri/src/overlay.rs)
 src/editor/shapes.js   modèle, rendu et géométrie des annotations
 src/editor/editor.js   interface de l'éditeur : outils, préréglages, historique, zoom, export,
                        enregistrement automatique et galerie

@@ -14,15 +14,6 @@ pub fn encode_png(image: &RgbaImage) -> Vec<u8> {
     out
 }
 
-/// JPEG directement depuis des pixels BGRA (capture d'écran), avec l'encodeur SIMD de jpeg-encoder.
-pub fn encode_jpeg_bgra(bgra: &[u8], width: u16, height: u16, quality: u8) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut encoder = jpeg_encoder::Encoder::new(&mut out, quality);
-    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2); // couleurs à demi-résolution (4:2:0)
-    let _ = encoder.encode(bgra, width, height, jpeg_encoder::ColorType::Bgra);
-    out
-}
-
 pub fn encode_jpeg(image: &DynamicImage, quality: u8) -> Vec<u8> {
     let mut out = Vec::new();
     let rgb = image.to_rgb8();

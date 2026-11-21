@@ -19,7 +19,6 @@ tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-jpeg-encoder = { version = "0.7", features = ["simd"] }
 arboard = "3"
 base64 = "0.22"
 trash = "5"
@@ -29,10 +28,9 @@ rand = "0.8"
 sha1_smol = "1"
 tokio = { version = "1", features = ["sync", "time"] }
 futures = "0.3"
+windows-numerics = "0.2" # même version que le crate windows
 
 [target.'cfg(windows)'.dependencies]
-webview2-com = "0.39" # même version que Tauri (wry)
-windows-core-webview = { package = "windows-core", version = "0.62" }
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
@@ -45,6 +43,9 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Direct3D11",
   "Win32_Graphics_Dxgi",
   "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Direct2D",
+  "Win32_Graphics_Direct2D_Common",
+  "Win32_Graphics_DirectWrite",
   "Win32_System_Performance",
   "Win32_System_Memory",
   "Win32_Graphics_Imaging",

@@ -14,6 +14,7 @@ mod keyhook;
 mod images;
 mod library;
 mod measure;
+mod overlay;
 mod selftest;
 mod settings;
 mod win;
@@ -328,6 +329,7 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(|| hotkeys::init(&app().hotkeys, on_hotkey_line, broadcast)); // sans retarder l'éditeur
     a.zones.start(); // détection des zones : prêt dès la première capture
     dxgi::warm_up(); // duplications du bureau ouvertes d'avance
+    overlay::prepare(); // fil de l'overlay et Direct2D prêts dès la première capture
     create_tray(handle)?;
     if !std::env::args().any(|arg| arg == HIDDEN_ARG) {
         editors::create(None);

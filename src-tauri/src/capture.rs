@@ -1,24 +1,21 @@
 // Capture d'écran et sélection de zone (comme la partie « Capture » de src/main.js).
-// Chaque écran est capturé en GDI, directement en Rust ; une fenêtre d'overlay par écran affiche la capture figée.
-// Les overlays sont conservés et réutilisés pour que la capture suivante soit instantanée.
+// Chaque écran est capturé directement en Rust (DXGI ou GDI) ; l'overlay natif (overlay.rs) affiche la capture
+// figée, une fenêtre par écran, gardée prête d'une capture à l'autre.
 use image::RgbaImage;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Manager, WebviewWindow};
 use tokio::sync::oneshot;
 
-use crate::{app, images, t, win, BRIDGE};
+use crate::{app, images, overlay, t, win};
 
 /// Image d'un écran, à sa résolution physique.
 pub struct Capture {
-    pub monitor: String,
     pub physical: [i32; 4], // position et taille de l'écran, en pixels physiques de l'écran virtuel
     pub scale: f64,
     pub bgra: Vec<u8>,
-    jpeg: Vec<u8>, // aperçu figé pour l'overlay : bien plus léger à transmettre que l'image brute
 }
 
 impl Capture {
@@ -63,24 +60,15 @@ pub struct Session {
     scrolling: bool,
 }
 
-pub struct Overlay {
-    label: String,
-    ready: Arc<AtomicBool>,
-}
-
 #[derive(Default)]
 pub struct CaptureState {
     pub capturing: AtomicBool,
     session: Mutex<Option<Session>>,
-    overlays: Mutex<HashMap<String, Overlay>>, // écran -> overlay
-    acks: Mutex<HashMap<String, oneshot::Sender<()>>>,
-    seq: AtomicU64,      // numéros des overlays
     sessions: AtomicU64, // numéro de la dernière sélection
 }
 
 const SNAPIT_ORIGIN: &str = "http://snapit.localhost";
-// Après ce délai sans capture, les overlays gardés en réserve sont détruits : au repos, Snapit libère la mémoire
-// de leurs pages (plusieurs centaines de Mo dans WebView2). La capture suivante les recrée (~100 ms de plus).
+// Après ce délai sans capture, les overlays libèrent leurs surfaces de dessin ; la capture suivante les recrée.
 const OVERLAY_IDLE: Duration = Duration::from_secs(120);
 
 // Images PNG envoyées à l'éditeur (les plus récentes), servies par le protocole snapit:// plutôt qu'encodées en
@@ -99,7 +87,7 @@ pub fn publish_image(png: Vec<u8>) -> String {
     format!("{SNAPIT_ORIGIN}/image/{id}.png")
 }
 
-/// Protocole snapit:// : images des écrans de la sélection en cours (overlays) et images de l'éditeur.
+/// Protocole snapit:// : images envoyées à l'éditeur.
 pub fn serve(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     let not_found = || tauri::http::Response::builder().status(404).body(Vec::new()).unwrap();
     let path = request.uri().path();
@@ -112,16 +100,7 @@ pub fn serve(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<V
             .body(png.as_ref().clone())
             .unwrap();
     }
-    let Some(index) = path.strip_prefix("/capture/").and_then(|i| i.parse::<usize>().ok()) else { return not_found() };
-    let capture = app().capture.session.lock().unwrap().as_ref().and_then(|s| s.captures.get(index).cloned());
-    let Some(capture) = capture else { return not_found() };
-    crate::measure::trace("image demandée par l'overlay");
-    tauri::http::Response::builder()
-        .header("Content-Type", "image/jpeg")
-        .header("Cache-Control", "no-store")
-        .header("Access-Control-Allow-Origin", "*")
-        .body(capture.jpeg.clone())
-        .unwrap()
+    not_found()
 }
 
 fn intersects([ax, ay, aw, ah]: [i32; 4], [bx, by, bw, bh]: [i32; 4]) -> bool {
@@ -138,7 +117,7 @@ async fn grab_displays(excluded: Vec<[i32; 4]>, since: i64) -> Result<Vec<Arc<Ca
         let (p, s) = (m.position(), m.size());
         let physical = [p.x, p.y, s.width as i32, s.height as i32];
         let after = excluded.iter().any(|r| intersects(*r, physical)).then_some(since);
-        let (bgra, jpeg) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
+        let bgra = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
             // Retirer une fenêtre de la capture ne produit pas de nouvelle image dans la duplication du bureau :
             // sur un écran où l'une de nos fenêtres est affichée, l'image vient donc de GDI, qui en tient compte.
             let duplicated = if after.is_none() { crate::dxgi::grab(physical, None) } else { None };
@@ -153,14 +132,11 @@ async fn grab_displays(excluded: Vec<[i32; 4]>, since: i64) -> Result<Vec<Arc<Ca
                     bgra
                 }
             };
-            let jpeg = win::encode_jpeg_wic(&bgra, physical[2] as u32, physical[3] as u32, 0.92)
-                .unwrap_or_else(|_| images::encode_jpeg_bgra(&bgra, physical[2] as u16, physical[3] as u16, 92));
-            crate::measure::trace("aperçu JPEG encodé");
-            Ok((bgra, jpeg))
+            Ok(bgra)
         })
         .await
         .map_err(|e| e.to_string())??;
-        captures.push(Arc::new(Capture { monitor: m.name().cloned().unwrap_or_default(), physical, scale: m.scale_factor(), bgra, jpeg }));
+        captures.push(Arc::new(Capture { physical, scale: m.scale_factor(), bgra }));
     }
     Ok(captures)
 }
@@ -335,59 +311,12 @@ pub fn capture_name() -> String {
 
 // ------------------------------------------------------------------------------------------- overlays
 
-fn get_overlay(monitor: &str, physical: [i32; 4]) -> Result<(WebviewWindow, Arc<AtomicBool>), String> {
-    let state = &app().capture;
-    let mut overlays = state.overlays.lock().unwrap();
-    if let Some(o) = overlays.get(monitor) {
-        if let Some(w) = app().handle.get_webview_window(&o.label) {
-            return Ok((w, o.ready.clone()));
-        }
-    }
-    let label = format!("overlay-{}", state.seq.fetch_add(1, Ordering::SeqCst));
-    let ready = Arc::new(AtomicBool::new(false));
-    let flag = ready.clone();
-    let window = WebviewWindowBuilder::new(&app().handle, &label, WebviewUrl::App("overlay/overlay.html".into()))
-        .title("Snapit — sélection")
-        .decorations(false)
-        .resizable(false)
-        .skip_taskbar(true)
-        .always_on_top(true)
-        .visible(false)
-        .focused(false)
-        .shadow(false)
-        .background_color(tauri::webview::Color(0, 0, 0, 255))
-        // le thème clair/sombre de WebView2 est commun à toutes les pages : l'overlay suit aussi les paramètres
-        .theme(crate::editors::theme())
-        .initialization_script(BRIDGE)
-        .on_page_load(move |_, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                flag.store(true, Ordering::SeqCst);
-            }
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
-    win::make_tool_window(&window);
-    place(&window, physical);
-    overlays.insert(monitor.into(), Overlay { label, ready: ready.clone() });
-    Ok((window, ready))
-}
-
-fn place(window: &WebviewWindow, [x, y, w, h]: [i32; 4]) {
-    let _ = window.set_position(PhysicalPosition::new(x, y));
-    let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
-}
-
-/// Détruit les overlays (changement d'écrans, de langue) ; ils sont recréés à la capture suivante.
+/// Détruit les overlays (changement d'écrans) ; ils sont recréés à la capture suivante.
 pub fn destroy_overlays() {
-    let state = &app().capture;
-    if state.session.lock().unwrap().is_some() {
+    if app().capture.session.lock().unwrap().is_some() {
         return; // on ne détruit rien pendant une sélection
     }
-    for (_, o) in state.overlays.lock().unwrap().drain() {
-        if let Some(w) = app().handle.get_webview_window(&o.label) {
-            let _ = w.destroy();
-        }
-    }
+    overlay::destroy();
 }
 
 // [x, y, l, h] physique -> pixels de l'image de l'écran (à la même échelle), coupé à ses bords
@@ -441,66 +370,39 @@ async fn select_region(captures: Vec<Arc<Capture>>, windows: Option<Vec<Value>>,
     let (tx, rx) = oneshot::channel();
     *state.session.lock().unwrap() = Some(Session { id, captures: captures.clone(), done: Some(tx), scrolling: false });
     app().hotkeys.lock().unwrap().set_escape(true);
-    let hint = t(if windows.is_some() { "overlay.hintDetect" } else { "overlay.hint" }, &[]);
-    let labels = json!({
-        "scrollPage": t("overlay.scrollPage", &[]),
-        "scrollArea": t("overlay.scrollArea", &[]),
-        "scrolling": t("overlay.scrolling", &[]),
-        "scrollStop": t("overlay.scrollStop", &[]),
-    });
+    let labels = overlay::Labels {
+        hint: t(if windows.is_some() { "overlay.hintDetect" } else { "overlay.hint" }, &[]),
+        scroll_page: t("overlay.scrollPage", &[]),
+        scroll_area: t("overlay.scrollArea", &[]),
+        scrolling: t("overlay.scrolling", &[]),
+        scroll_stop: t("overlay.scrollStop", &[]),
+    };
     let cursor = app().handle.cursor_position().unwrap_or_default();
 
-    let shown = captures.iter().enumerate().map(|(index, c)| {
-        let (hint, labels, regions) = (hint.clone(), labels.clone(), windows_on(c, &windows));
-        let c = c.clone();
-        async move {
-            let (window, ready) = get_overlay(&c.monitor, c.physical).ok()?;
-            win::set_low_memory(&window, false);
-            for _ in 0..300 {
-                if ready.load(Ordering::SeqCst) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            let (ack_tx, ack_rx) = oneshot::channel();
-            app().capture.acks.lock().unwrap().insert(window.label().to_string(), ack_tx);
-            let here = contains(c.physical, cursor.x, cursor.y);
-            crate::measure::trace("overlay prêt, envoi de l'image");
-            let _ = window.emit_to(
-                window.label(),
-                "overlay:show",
-                json!({
-                    "dataUrl": format!("{SNAPIT_ORIGIN}/capture/{index}?s={id}"),
-                    "hint": hint,
-                    "labels": labels,
-                    "regions": regions,
-                    // pour mettre en évidence la zone d'emblée (pixels CSS de l'overlay)
-                    "cursor": if here { json!({ "x": (cursor.x - c.physical[0] as f64) / c.scale, "y": (cursor.y - c.physical[1] as f64) / c.scale }) } else { Value::Null },
-                }),
-            );
-            let acked = tokio::time::timeout(Duration::from_millis(1500), ack_rx).await.is_ok();
-            crate::measure::trace(if acked { "image affichée par l'overlay" } else { "overlay muet (délai dépassé)" });
-            app().capture.acks.lock().unwrap().remove(window.label());
-            if !session_is(id) {
-                return None;
-            }
-            place(&window, c.physical);
-            let _ = window.show();
-            crate::measure::trace("overlay visible");
-            place(&window, c.physical); // corrige le positionnement sur les écrans à échelle mixte
-            // Tauri réécrit le style étendu à l'affichage : l'overlay redevient une fenêtre « outil », sans quoi
-            // Chrome et Edge se croient cachés et cessent de dessiner et de décrire leur page
-            win::make_tool_window(&window);
-            Some((window, c.physical))
+    let mut shown = Vec::new();
+    for (index, c) in captures.iter().enumerate() {
+        let here = contains(c.physical, cursor.x, cursor.y);
+        let drawn = overlay::show(overlay::Show {
+            index,
+            session: id,
+            capture: c.clone(),
+            windows: windows_on(c, &windows),
+            labels: labels.clone(),
+            // pour mettre en évidence la zone d'emblée (pixels de l'image)
+            cursor: here.then(|| (cursor.x - c.physical[0] as f64, cursor.y - c.physical[1] as f64)),
+        });
+        let drawn = tokio::time::timeout(Duration::from_millis(1500), drawn).await.is_ok_and(|r| r.is_ok());
+        crate::measure::trace(if drawn { "overlay visible" } else { "overlay muet (délai dépassé)" });
+        if drawn {
+            shown.push((index, here));
         }
-    });
-    let shown: Vec<_> = futures::future::join_all(shown).await.into_iter().flatten().collect();
+    }
     let mut newly_hidden = Vec::new();
     if session_is(id) {
         newly_hidden = on_shown();
-        let active = shown.iter().find(|(_, p)| contains(*p, cursor.x, cursor.y)).or(shown.first());
-        if let Some((w, _)) = active {
-            let _ = w.set_focus();
+        let active = shown.iter().find(|(_, here)| *here).or(shown.first());
+        if let Some((index, _)) = active {
+            overlay::focus(*index);
         }
     }
     let result = rx.await.ok().flatten();
@@ -515,13 +417,7 @@ fn end_session(result: Option<CaptureResult>) {
     let state = &app().capture;
     let Some(mut session) = state.session.lock().unwrap().take() else { return };
     app().hotkeys.lock().unwrap().set_escape(false);
-    for o in state.overlays.lock().unwrap().values() {
-        if let Some(w) = app().handle.get_webview_window(&o.label) {
-            let _ = w.hide();
-            let _ = w.emit_to(w.label(), "overlay:reset", ());
-            win::set_low_memory(&w, true); // l'overlay reste prêt, mais WebView2 libère sa mémoire
-        }
-    }
+    overlay::hide_all();
     if let Some(done) = session.done.take() {
         let _ = done.send(result);
     }
@@ -529,7 +425,7 @@ fn end_session(result: Option<CaptureResult>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(OVERLAY_IDLE).await;
         if app().capture.sessions.load(Ordering::SeqCst) == id && app().capture.session.lock().unwrap().is_none() {
-            destroy_overlays(); // aucune capture depuis
+            overlay::release(); // aucune capture depuis
         }
     });
 }
@@ -544,22 +440,14 @@ pub fn cancel_selection() {
     }
 }
 
-pub fn overlay_ready(label: &str) {
-    if let Some(ack) = app().capture.acks.lock().unwrap().remove(label) {
-        let _ = ack.send(());
-    }
-}
-
-// Capture affichée par l'overlay `label` pendant la sélection en cours
-fn capture_of(label: &str) -> Option<Arc<Capture>> {
-    let state = &app().capture;
-    let monitor = state.overlays.lock().unwrap().iter().find(|(_, o)| o.label == label).map(|(m, _)| m.clone())?;
-    state.session.lock().unwrap().as_ref()?.captures.iter().find(|c| c.monitor == monitor).cloned()
+/// Capture affichée par l'overlay de l'écran `index` pendant la sélection en cours.
+pub fn capture_at(index: usize) -> Option<Arc<Capture>> {
+    app().capture.session.lock().unwrap().as_ref()?.captures.get(index).cloned()
 }
 
 /// Éléments d'interface sous la souris (point en pixels de l'image de l'overlay), du plus grand au plus petit.
-pub async fn probe(label: &str, hwnd: i64, x: f64, y: f64) -> Value {
-    let Some(c) = capture_of(label) else { return Value::Null };
+pub async fn probe(index: usize, hwnd: i64, x: f64, y: f64) -> Value {
+    let Some(c) = capture_at(index) else { return Value::Null };
     if !x.is_finite() || !y.is_finite() {
         return Value::Null;
     }
@@ -582,11 +470,11 @@ pub async fn probe(label: &str, hwnd: i64, x: f64, y: f64) -> Value {
 }
 
 /// Zone choisie (fractions de l'image de l'overlay).
-pub fn select(label: &str, frac: &Value) {
+pub fn select(index: usize, frac: &Value) {
     if app().capture.session.lock().unwrap().is_none() {
         return;
     }
-    let Some(c) = capture_of(label) else { return end_session(None) };
+    let Some(c) = capture_at(index) else { return end_session(None) };
     let f = |k: &str| frac.get(k).and_then(Value::as_f64).unwrap_or(0.0);
     let (w, h) = (c.width(), c.height());
     let x = ((f("x") * w as f64).round() as i32).clamp(0, w - 1);
@@ -596,19 +484,11 @@ pub fn select(label: &str, frac: &Value) {
     end_session(Some(CaptureResult { image: c.crop([x, y, cw, ch]), png: None, scale: c.scale, notice: None }));
 }
 
-/// Le clavier (Entrée, flèches, Échap) suit la souris d'un écran à l'autre.
-pub fn focus(window: &WebviewWindow) {
-    if app().capture.session.lock().unwrap().is_some() {
-        let _ = window.set_focus();
-    }
-}
-
 /// Capture défilante de la zone [x, y, l, h] (pixels de l'image de l'overlay), qui montre l'élément `scroll` :
 /// l'assistant fait défiler la page de haut en bas en la capturant, puis assemble les captures. L'overlay reste
 /// affiché mais Windows le retire des captures. En cas d'échec, seule la partie visible est capturée.
-pub async fn scroll(window: WebviewWindow, zone: Value) {
-    let label = window.label().to_string();
-    let Some(c) = capture_of(&label) else { return };
+pub async fn scroll(index: usize, zone: Value) {
+    let Some(c) = capture_at(index) else { return };
     let scroll = zone.get("scroll").and_then(Value::as_i64).unwrap_or(0);
     let v = |k: &str| zone.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
     let (Some(x), Some(y), Some(w), Some(h)) = (v("x"), v("y"), v("w"), v("h")) else { return };
@@ -627,15 +507,12 @@ pub async fn scroll(window: WebviewWindow, zone: Value) {
     let physical = [c.physical[0] + zone[0], c.physical[1] + zone[1], zone[2], zone[3]];
 
     if app().exclude_supported {
-        win::set_excluded_from_capture(&window, true);
+        overlay::set_excluded(index, true);
     } else {
-        let _ = window.hide();
+        overlay::hide(index);
     }
     tokio::time::sleep(Duration::from_millis(120)).await; // le temps que l'overlay disparaisse des captures
-    let progress_window = window.clone();
-    let progress = move |value: f64| {
-        let _ = progress_window.emit_to(progress_window.label(), "overlay:scroll-progress", value);
-    };
+    let progress = move |value: f64| overlay::progress(index, value);
     let done = app().zones.scroll_capture(scroll, physical, c.scale, progress).await;
     let result = done.map(|done| {
         let notice = match done.end.as_str() {
@@ -645,7 +522,7 @@ pub async fn scroll(window: WebviewWindow, zone: Value) {
         };
         CaptureResult { image: done.image, png: None, scale: c.scale, notice }
     });
-    win::set_excluded_from_capture(&window, false);
+    overlay::set_excluded(index, false);
     end_session(Some(result.unwrap_or_else(|| CaptureResult { image: c.crop(zone), png: None, scale: c.scale, notice: Some(t("toast.scrollFailed", &[])) })));
 }
 

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::Manager;
 
 use crate::{app, capture, editors, win};
 
@@ -101,7 +100,7 @@ async fn until(timeout: Duration, test: impl Fn() -> bool) -> Option<Instant> {
 }
 
 fn overlay_visible() -> bool {
-    app().handle.webview_windows().iter().any(|(l, w)| l.starts_with("overlay-") && w.is_visible().unwrap_or(false))
+    crate::overlay::is_visible()
 }
 
 fn capturing() -> bool {
@@ -178,8 +177,10 @@ pub fn start() {
             }
         }
         capture::destroy_overlays();
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        // Direct2D et le pilote graphique rendent la mémoire des surfaces de dessin avec quelques secondes de retard
+        tokio::time::sleep(Duration::from_secs(15)).await;
         let memory_tray_no_overlays = win::memory_of_process_tree();
+        let private_tray = win::private_memory();
         let processes: Vec<_> = win::memory_by_process().into_iter().map(|(name, bytes)| json!({ "name": name, "mb": bytes / 1024 / 1024 })).collect();
 
         let results = json!({
@@ -194,6 +195,7 @@ pub fn start() {
             "memoryEditorOpenMb": memory_editor / 1024 / 1024,
             "memoryTrayOnlyMb": memory_tray / 1024 / 1024,
             "memoryTrayNoOverlaysMb": memory_tray_no_overlays / 1024 / 1024,
+            "privateTrayNoOverlaysMb": private_tray / 1024 / 1024,
             "processesTrayOnly": processes,
             "version": env!("CARGO_PKG_VERSION"),
             "build": if cfg!(debug_assertions) { "debug" } else { "release" },

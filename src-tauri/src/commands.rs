@@ -42,12 +42,6 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         settings_open_windows_keyboard,
         shortcuts_record_start,
         shortcuts_record_stop,
-        overlay_ready,
-        overlay_select,
-        overlay_cancel,
-        overlay_probe,
-        overlay_focus,
-        overlay_scroll,
     ]
 }
 
@@ -335,36 +329,4 @@ fn shortcuts_record_start() {
 #[tauri::command]
 fn shortcuts_record_stop() {
     app().hotkeys.lock().unwrap().stop_recording();
-}
-
-// ------------------------------------------------------------------------------------ sélection de zone
-
-#[tauri::command]
-fn overlay_ready(window: WebviewWindow) {
-    cap::overlay_ready(window.label());
-}
-
-#[tauri::command]
-fn overlay_select(window: WebviewWindow, rect: Value) {
-    cap::select(window.label(), &rect);
-}
-
-#[tauri::command]
-fn overlay_cancel() {
-    cap::cancel_selection();
-}
-
-#[tauri::command]
-async fn overlay_probe(window: WebviewWindow, hwnd: i64, x: f64, y: f64) -> Value {
-    cap::probe(window.label(), hwnd, x, y).await
-}
-
-#[tauri::command]
-fn overlay_focus(window: WebviewWindow) {
-    cap::focus(&window);
-}
-
-#[tauri::command]
-async fn overlay_scroll(window: WebviewWindow, zone: Value) {
-    cap::scroll(window, zone).await;
 }
