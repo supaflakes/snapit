@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
@@ -142,14 +142,14 @@ pub fn start() {
         let _ = std::fs::create_dir_all(out_dir());
         let shown = until(Duration::from_secs(15), || app().handle.webview_windows().iter().any(|(l, w)| l.starts_with("editor-") && w.is_visible().unwrap_or(false))).await;
         check("l'éditeur s'ouvre au démarrage", shown, "");
-        until(Duration::from_secs(30), || app().regions.running()).await;
+        until(Duration::from_secs(30), || app().zones.running()).await;
         let hook = until(Duration::from_secs(30), || {
             let h = app().hotkeys.lock().unwrap();
             h.hook_ready || h.hook_failed
         })
         .await;
         check("assistant clavier démarré", hook && app().hotkeys.lock().unwrap().hook_ready, app().hotkeys.lock().unwrap().status().to_string());
-        check("assistant de détection des zones démarré", app().regions.running(), "");
+        check("assistant de détection des zones démarré", app().zones.running(), "");
         tokio::time::sleep(Duration::from_millis(800)).await;
         screenshot("0-editeur.png");
 
@@ -167,6 +167,8 @@ pub fn start() {
             check("l'Outil Capture ne s'ouvre pas", snipping_after <= snipping_before, format!("{snipping_before} → {snipping_after}"));
             tokio::time::sleep(Duration::from_millis(400)).await;
         }
+        scroll_test().await;
+
         // Enregistrement d'un raccourci dans les paramètres : Maj+Impr. écran est remontée par le hook
         app().hotkeys.lock().unwrap().start_recording();
         press(&[(0xa0, 0x2a), (0x2c, 0)]).await;
@@ -294,7 +296,7 @@ pub fn start() {
         }
         check("capture copiée dans le presse-papiers", clip.as_ref().is_some_and(|c| c.width() == m.width && c.height() == m.height), clip.map(|c| format!("{}×{}", c.width(), c.height())).unwrap_or_default());
         let after = app().library.lock().unwrap().list(&crate::library_folder()).len();
-        check("la galerie contient les deux captures", after == before + 1 && after == 2, format!("{after} capture(s)"));
+        check("la galerie s'enrichit de la nouvelle capture", after == before + 1, format!("{after} capture(s)"));
         tokio::time::sleep(Duration::from_millis(1500)).await;
         screenshot("5-plein-ecran-dans-editeur.png");
 
@@ -308,4 +310,135 @@ pub fn start() {
         }
         app().handle.exit(if failures == 0 { 0 } else { 1 });
     });
+}
+
+// Capture défilante d'une page de test (la même que le test de fumée Electron), ouverte dans un autre processus
+// comme un vrai navigateur : en-tête fixe, 16 bandes de couleurs différentes.
+async fn scroll_test() {
+    use std::io::BufRead;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let electron = root.join("node_modules").join("electron").join("dist").join("electron.exe");
+    if !electron.exists() {
+        check("capture défilante : page de test (Electron introuvable)", false, electron.display().to_string());
+        return;
+    }
+    const HEADER: f64 = 50.0;
+    const BAND: f64 = 150.0;
+    const BANDS: usize = 16;
+    let bands: String = (0..BANDS)
+        .map(|i| format!(r#"<div style="height:{BAND}px;background:hsl({},70%,{}%)"><p style="margin:0;padding:24px 0 0 220px">Bande {i} : du texte pour superposer les captures</p></div>"#, (i * 47) % 360, if i % 2 == 1 { 40 } else { 70 }))
+        .collect();
+    let file = out_dir().join("page-defilante.html");
+    let _ = std::fs::write(&file, format!(r#"<!doctype html><meta charset="utf-8"><body style="margin:0;font:18px sans-serif"><div style="position:sticky;top:0;height:{HEADER}px;background:#0f172a;color:#fff;padding-left:220px;line-height:{HEADER}px">En-tête fixe</div>{bands}</body>"#));
+    let Ok(Some(m)) = app().handle.primary_monitor() else { return };
+    let sf = m.scale_factor();
+    let (px, py) = (m.position().x as f64 / sf, m.position().y as f64 / sf);
+    // nos fenêtres sont cachées le temps du test : la page doit être visible
+    let hidden: Vec<_> = app().handle.webview_windows().into_values().filter(|w| w.is_visible().unwrap_or(false)).collect();
+    for w in &hidden {
+        let _ = w.hide();
+    }
+    let mut child = match std::process::Command::new(&electron)
+        .arg(root.join("scripts").join("smoke-page.js"))
+        .args([file.display().to_string(), (px + 260.0).to_string(), (py + 160.0).to_string(), "700".into(), "480".into(), "400".into()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            check("capture défilante : page de test ouverte", false, e.to_string());
+            return;
+        }
+    };
+    let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = lines.clone();
+    let stdout = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            sink.lock().unwrap().push(line);
+        }
+    });
+    let ready = until(Duration::from_secs(15), || lines.lock().unwrap().iter().any(|l| l.starts_with("ready "))).await;
+    check("capture défilante : page de test ouverte", ready, "");
+    let hwnd = lines.lock().unwrap().iter().find_map(|l| l.strip_prefix("ready ").and_then(|h| h.parse::<i64>().ok()));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let scroll_y = || lines.lock().unwrap().iter().rev().find_map(|l| l.strip_prefix("scrollY ").and_then(|v| v.parse::<f64>().ok()));
+    if let Some(hwnd) = hwnd {
+        let (x, y) = ((px + 260.0 + 350.0) * sf, (py + 160.0 + 240.0) * sf);
+        // une seule recherche, comme au premier survol de la page dans l'overlay
+        let chain = app().zones.probe(hwnd, x, y).await.unwrap_or_default();
+        let target = chain.iter().rev().find(|e| e[5].as_i64().unwrap_or(0) > 0).cloned();
+        check("capture défilante : la page qui défile est détectée", target.is_some(), format!("{} élément(s) sous la souris", chain.len()));
+        if let Some(t) = target {
+            let v = |i: usize| t[i].as_i64().unwrap_or(0) as i32;
+            let started = Instant::now();
+            let result = app().zones.scroll_capture(t[5].as_i64().unwrap(), [v(0), v(1), v(2), v(3)], sf, |_| {}).await;
+            let elapsed = started.elapsed();
+            match result {
+                Some(r) => {
+                    let img = &r.image;
+                    let _ = std::fs::write(out_dir().join("6-page-entiere.png"), images::encode_png(img));
+                    let expected = ((HEADER + BAND * BANDS as f64) * sf).round();
+                    check("capture défilante : hauteur de la page entière", (img.height() as f64 - expected).abs() <= 2.0, format!("{}×{}, attendu {expected} de haut, fin « {} », {} ms", img.width(), img.height(), r.end, elapsed.as_millis()));
+                    check("capture défilante : sans la barre de défilement", (img.width() as f64) < 700.0 * sf && img.width() as f64 > 700.0 * sf - 40.0 * sf, format!("{} px de large", img.width()));
+                    let at = |x: f64, y: f64| {
+                        let p = img.get_pixel(((x * sf).round() as u32).min(img.width() - 1), ((y * sf).round() as u32).min(img.height() - 1));
+                        format!("{},{},{}", p[0], p[1], p[2])
+                    };
+                    let header = at(20.0, HEADER / 2.0);
+                    let found: Vec<[String; 4]> = (0..BANDS)
+                        .map(|i| {
+                            let top = HEADER + BAND * i as f64;
+                            [at(20.0, top - 3.0), at(20.0, top + 3.0), at(20.0, top + BAND * 0.7), at(20.0, top + BAND - 4.0)]
+                        })
+                        .collect();
+                    let placed = found.iter().enumerate().all(|(i, b)| b[1] == b[2] && b[2] == b[3] && if i == 0 { b[0] == header } else { b[0] == found[i - 1][2] });
+                    let distinct = found.iter().enumerate().all(|(i, b)| (i == 0 || b[2] != found[i - 1][2]) && b[2] != header);
+                    check("capture défilante : bandes à leur place, en-tête fixe une seule fois", placed && distinct, format!("{:?}", &found[..3]));
+                }
+                None => check("capture défilante : image assemblée", false, ""),
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let back = scroll_y();
+            check("capture défilante : la page revient à sa position", back.is_some_and(|y| (y - 400.0).abs() <= 1.0), format!("scrollY = {back:?}"));
+
+            // Chemin complet : sélection de zone, élément sous la souris dans l'overlay, capture défilante lancée
+            // depuis l'overlay (qui reste affiché, retiré des captures), puis la page entière dans l'éditeur.
+            let before = app().library.lock().unwrap().list(&crate::library_folder()).len();
+            tauri::async_runtime::spawn(async { capture::start_capture("region", false).await });
+            let shown = until(Duration::from_secs(5), || visible_overlay().is_some()).await;
+            if let (true, Some(overlay)) = (shown, visible_overlay()) {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let origin = m.position();
+                let (ix, iy) = (x - origin.x as f64, y - origin.y as f64);
+                let chain = capture::probe(overlay.label(), hwnd, ix, iy).await;
+                let zone = chain.as_array().and_then(|c| c.iter().rev().find(|e| e[5].as_i64().unwrap_or(0) > 0).cloned());
+                check("overlay : la page qui défile est proposée", zone.is_some(), chain.to_string());
+                if let Some(z) = zone {
+                    let started = Instant::now();
+                    capture::scroll(overlay.clone(), json!({ "scroll": z[5], "x": z[0], "y": z[1], "w": z[2], "h": z[3] })).await;
+                    let elapsed = started.elapsed();
+                    until(Duration::from_secs(10), || !capturing()).await;
+                    let list = app().library.lock().unwrap().list(&crate::library_folder());
+                    let expected = ((HEADER + BAND * BANDS as f64) * sf).round();
+                    let height = list.first().and_then(|i| i["height"].as_f64()).unwrap_or(0.0);
+                    check(
+                        "overlay : la page entière s'ouvre dans l'éditeur",
+                        list.len() == before + 1 && (height - expected).abs() <= 2.0,
+                        format!("{height} px de haut, attendu {expected}, {} ms", elapsed.as_millis()),
+                    );
+                } else {
+                    capture::cancel_selection();
+                }
+            } else {
+                check("overlay : sélection ouverte sur la page", false, "");
+            }
+            until(Duration::from_secs(5), || !capturing()).await;
+        }
+    }
+    let _ = child.kill();
+    for w in &hidden {
+        let _ = w.show();
+    }
 }

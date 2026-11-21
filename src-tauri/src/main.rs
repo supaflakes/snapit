@@ -17,6 +17,7 @@ mod measure;
 mod selftest;
 mod settings;
 mod win;
+mod zones;
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -39,7 +40,7 @@ pub struct Snapit {
     pub data_dir: PathBuf,
     pub settings: settings::SettingsStore,
     pub library: Mutex<library::Library>,
-    pub regions: Arc<helpers::Regions>,
+    pub zones: Arc<zones::Zones>,
     pub hotkeys: Mutex<hotkeys::Hotkeys>,
     pub editors: editors::EditorsState,
     pub capture: capture::CaptureState,
@@ -302,7 +303,7 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         data_dir: dir.clone(),
         settings,
         library: Mutex::new(library::Library::new()),
-        regions: helpers::Regions::new(dir.join("bin")),
+        zones: zones::Zones::new(),
         hotkeys: Mutex::new(hotkeys::Hotkeys::new(handle.clone())),
         editors: Default::default(),
         capture: Default::default(),
@@ -325,7 +326,7 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     // hook clavier (Impr. écran prioritaire sur l'Outil Capture), puis raccourcis
     std::thread::spawn(|| hotkeys::init(&app().hotkeys, on_hotkey_line, broadcast)); // sans retarder l'éditeur
-    a.regions.start(); // détection des zones : prêt dès la première capture
+    a.zones.start(); // détection des zones : prêt dès la première capture
     dxgi::warm_up(); // duplications du bureau ouvertes d'avance
     create_tray(handle)?;
     if !std::env::args().any(|arg| arg == HIDDEN_ARG) {
@@ -365,7 +366,7 @@ fn main() {
         RunEvent::Exit => {
             if let Some(a) = APP.get() {
                 a.hotkeys.lock().unwrap().dispose();
-                a.regions.stop();
+                a.zones.stop();
             }
             let _ = handle;
         }

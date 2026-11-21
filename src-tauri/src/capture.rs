@@ -229,8 +229,8 @@ pub async fn start_capture(mode: &str, from_menu: bool) {
         } // l'exclusion de la capture est immédiate : rien à attendre dans ce cas
         // les fenêtres visibles sont relevées en même temps que l'image, pour la détection de zone
         let detect = mode == "region" && app().settings.get().detect_regions;
-        let regions = app().regions.clone();
-        let (captures, found) = futures::join!(grab_displays(excluded_rects.clone(), excluded_since), async { if detect { regions.windows().await } else { None } });
+        let zones = app().zones.clone();
+        let (captures, found) = futures::join!(grab_displays(excluded_rects.clone(), excluded_since), async { if detect { zones.windows().await } else { None } });
         crate::measure::trace("écrans capturés, fenêtres relevées");
         set_excluded(&excluded, false);
         let captures = captures?;
@@ -488,6 +488,9 @@ async fn select_region(captures: Vec<Arc<Capture>>, windows: Option<Vec<Value>>,
             let _ = window.show();
             crate::measure::trace("overlay visible");
             place(&window, c.physical); // corrige le positionnement sur les écrans à échelle mixte
+            // Tauri réécrit le style étendu à l'affichage : l'overlay redevient une fenêtre « outil », sans quoi
+            // Chrome et Edge se croient cachés et cessent de dessiner et de décrire leur page
+            win::make_tool_window(&window);
             Some((window, c.physical))
         }
     });
@@ -535,7 +538,7 @@ fn end_session(result: Option<CaptureResult>) {
 pub fn cancel_selection() {
     let scrolling = app().capture.session.lock().unwrap().as_ref().is_some_and(|s| s.scrolling);
     if scrolling {
-        app().regions.stop_scroll();
+        app().zones.stop_scroll();
     } else {
         end_session(None);
     }
@@ -560,7 +563,7 @@ pub async fn probe(label: &str, hwnd: i64, x: f64, y: f64) -> Value {
     if !x.is_finite() || !y.is_finite() {
         return Value::Null;
     }
-    let Some(chain) = app().regions.probe(hwnd, c.physical[0] as f64 + x, c.physical[1] as f64 + y).await else { return Value::Null };
+    let Some(chain) = app().zones.probe(hwnd, c.physical[0] as f64 + x, c.physical[1] as f64 + y).await else { return Value::Null };
     if app().capture.session.lock().unwrap().is_none() {
         return Value::Null;
     }
@@ -622,7 +625,6 @@ pub async fn scroll(window: WebviewWindow, zone: Value) {
     let zy = (y.round() as i32).clamp(0, zh - 1);
     let zone = [zx, zy, (w.round() as i32).clamp(1, zw - zx), (h.round() as i32).clamp(1, zh - zy)];
     let physical = [c.physical[0] + zone[0], c.physical[1] + zone[1], zone[2], zone[3]];
-    let file = std::env::temp_dir().join(format!("snapit-page-{}-{}.png", std::process::id(), chrono::Utc::now().timestamp_millis()));
 
     if app().exclude_supported {
         win::set_excluded_from_capture(&window, true);
@@ -634,23 +636,15 @@ pub async fn scroll(window: WebviewWindow, zone: Value) {
     let progress = move |value: f64| {
         let _ = progress_window.emit_to(progress_window.label(), "overlay:scroll-progress", value);
     };
-    let done = app().regions.scroll_capture(scroll, physical, c.scale, &file, &progress).await;
-    let mut result = None;
-    if let Some(done) = done {
-        if let Ok(png) = std::fs::read(&file) {
-            if let Ok(image) = image::load_from_memory(&png) {
-                let image = image.to_rgba8();
-                let end = done.get("end").and_then(Value::as_str).unwrap_or_default();
-                let notice = match end {
-                    "limit" => Some(t("toast.pageTruncated", &[("h", &format_height(image.height()))])),
-                    "interrupted" => Some(t("toast.scrollIncomplete", &[])),
-                    _ => None,
-                };
-                result = Some(CaptureResult { image, png: Some(png), scale: c.scale, notice });
-            }
-        }
-    }
-    let _ = std::fs::remove_file(&file);
+    let done = app().zones.scroll_capture(scroll, physical, c.scale, progress).await;
+    let result = done.map(|done| {
+        let notice = match done.end.as_str() {
+            "limit" => Some(t("toast.pageTruncated", &[("h", &format_height(done.image.height()))])),
+            "interrupted" => Some(t("toast.scrollIncomplete", &[])),
+            _ => None,
+        };
+        CaptureResult { image: done.image, png: None, scale: c.scale, notice }
+    });
     win::set_excluded_from_capture(&window, false);
     end_session(Some(result.unwrap_or_else(|| CaptureResult { image: c.crop(zone), png: None, scale: c.scale, notice: Some(t("toast.scrollFailed", &[])) })));
 }

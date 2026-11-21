@@ -34,6 +34,7 @@ pub fn make_tool_window(window: &tauri::WebviewWindow) {
             let style = GetWindowLongPtrW(h, GWL_EXSTYLE);
             let style = (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
             SetWindowLongPtrW(h, GWL_EXSTYLE, style);
+            let _ = SetWindowPos(h, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         }
     }
 }

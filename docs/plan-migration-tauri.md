@@ -207,6 +207,40 @@ sur l'Outil Capture, redirection de Win+Maj+S, enregistrement des raccourcis dan
 *Résultat : plus aucun code C#, plus de dépendance à `csc.exe`, donc plus de risque de blocage par un antivirus.
 C'est la phase la plus longue (environ 1 000 lignes de C# délicates).*
 
+**Faite dans la version Tauri (20/11/2026)** : `zones.rs` remplace `regions.cs`.
+
+- **Fenêtres :** énumération Win32 directe.
+- **Éléments sous la souris :** UI Automation par COM, sur un fil dédié ; seule la dernière recherche compte.
+- **Capture défilante :** même algorithme d'assemblage que le C#, transcrit ligne à ligne. L'image est rendue
+  directement, sans passer par un fichier PNG.
+- **Validation :** avant de retirer le C#, l'autotest a comparé les deux versions. Les listes de fenêtres étaient
+  identiques, et les éléments trouvés aussi sur 7 points de l'écran (42 éléments).
+- **La version Tauri ne contient plus de C#** : rien n'est compilé au premier lancement, `csc.exe` n'est plus
+  appelé, et il n'y a plus d'assistant `regions-….exe` (30 Mo) ni de console associée. Mémoire au repos : 116 Mo
+  (le processus principal et celui du hook clavier). `src/native/*.cs` reste utilisé par la version Electron.
+
+Deux problèmes trouvés et corrigés en route :
+
+- **Chromium n'active son accessibilité complète qu'après une première interrogation.** La toute première recherche
+  sur une page ne voyait donc pas qu'elle défile, et le bouton « Capturer toute la page » n'apparaissait pas au
+  premier survol. C'est très probablement la cause de l'échec du test de fumée Electron, dont l'assistant C# a le
+  même défaut. Désormais, les pages Chromium visibles sont « réveillées » au début de chaque sélection, et une
+  première recherche sur une page qui ne montre rien à faire défiler est refaite après 150 ms.
+- **Tauri réécrit le style étendu de l'overlay à l'affichage**, ce qui lui faisait perdre WS_EX_TOOLWINDOW. Chrome
+  et Edge se croyaient alors cachés : ils cessaient de dessiner leur page, et la capture défilante lancée depuis
+  l'overlay ne gardait que la partie visible. Le style est maintenant réappliqué après chaque affichage.
+
+Autotest : la page de test du test de fumée Electron est ouverte dans un processus à part. Deux scénarios sont
+vérifiés :
+
+- **Capture défilante directe :** hauteur exacte (3 063 px), barre de défilement retirée, 16 bandes à leur place,
+  en-tête fixe gardé une seule fois, et la page qui revient à sa position.
+- **Chemin complet de l'utilisateur :** sélection de zone, page proposée dans l'overlay, capture défilante lancée
+  depuis l'overlay, puis la page entière dans l'éditeur.
+
+Non fait : les pages difficiles de `scripts/scroll-test.js` (en-tête translucide, barre latérale collante, bouton
+flottant) n'ont pas encore été portées dans l'autotest Rust.
+
 ### Phase 5 — Overlay de sélection natif
 
 1. Une fenêtre Win32 par écran (WS_EX_TOOLWINDOW, comme aujourd'hui, pour que Chrome et Edge continuent de

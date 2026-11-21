@@ -145,7 +145,7 @@ pub fn start() {
             h.hook_ready || h.hook_failed
         })
         .await;
-        until(Duration::from_secs(30), || app().regions.running()).await;
+        until(Duration::from_secs(30), || app().zones.running()).await;
         tokio::time::sleep(Duration::from_secs(3)).await;
         let memory_editor = win::memory_of_process_tree();
 
