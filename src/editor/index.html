@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: http://asset.localhost; style-src 'self' 'unsafe-inline'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Snapit</title>
   <link rel="stylesheet" href="../theme.css">
@@ -142,7 +142,7 @@
 
     <section id="empty" aria-labelledby="empty-title">
       <div class="empty-card">
-        <img src="../../assets/icon.png" alt="" width="64" height="64">
+        <img src="../icon.png" alt="" width="64" height="64">
         <h1 id="empty-title" data-i18n="empty.title">Capturez, annotez, partagez</h1>
         <p data-i18n="empty.text">Sélectionnez une zone de l'écran, puis ajoutez flèches, textes, étapes numérotées ou zones pixelisées.</p>
         <div class="empty-actions">

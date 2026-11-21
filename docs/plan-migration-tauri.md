@@ -89,6 +89,37 @@ snapit/
 *Résultat : Snapit sous Tauri, même apparence, installeur d'environ 10 Mo, mémoire au repos fortement réduite.
 Publiable en 0.5.0.*
 
+**Faite (20/11/2026), à côté de la version Electron, qui reste intacte** :
+
+- `src-tauri/` : Tauri 2, en Rust. Paramètres (`%APPDATA%\snapit\settings.json`) et bibliothèque dans le même
+  format que la version Electron. Les assistants C# sont repris tels quels pour les raccourcis et la détection des
+  zones.
+- `src/bridge.js` remplace `preload.js`. Les pages ne changent pas, à trois détails près : la politique de sécurité
+  (CSP) autorise l'IPC de Tauri et ses images, l'icône est servie depuis `src/icon.png`, et l'overlay libère son
+  image à la fin d'une sélection.
+- La capture d'écran se fait directement en Rust (GDI, `win::grab_screen`). L'overlay reçoit un aperçu JPEG encodé
+  par Windows (WIC, environ 12 ms) par le protocole `snapit://`.
+- Les overlays restent prêts entre deux captures, avec une mémoire réduite dans WebView2. Après 2 minutes sans
+  capture, ils sont détruits : Snapit au repos redescend à environ 110 Mo.
+- `npm run tauri:selftest` : autotest de bout en bout (15 vérifications, captures d'écran de contrôle dans
+  `%TEMP%\snapit-selftest`). `npm run tauri:measure` : mesures, dans `%TEMP%\snapit-measure-tauri`.
+  `npm run tauri:dist` : installeur.
+
+| | Electron (capture native) | Tauri |
+| --- | --- | --- |
+| Installeur | 106,3 Mo | **1,7 Mo** |
+| Demande de capture → overlay affiché | 114 ms | 125 à 170 ms (200 à 280 ms la première fois) |
+| Capture plein écran → éditeur | 226 ms | 220 à 250 ms |
+| Mémoire, éditeur ouvert | 389 Mo | 424 à 438 Mo |
+| Mémoire au repos, juste après des captures | 759 à 870 Mo | 529 Mo |
+| Mémoire au repos, après 2 minutes sans capture | 759 à 870 Mo | **112 Mo** |
+
+Points restant à vérifier à la main, que l'autotest ne couvre pas : la touche Impr. écran réelle (la version
+Electron installée était ouverte pendant les tests et intercepte aussi la touche), la capture défilante (dont le
+test échoue aussi dans la version Electron), le menu de la zone de notification, le menu contextuel de la galerie,
+les boîtes d'enregistrement et d'ouverture, le glisser-déposer d'une image et le lancement au démarrage. Les
+notifications apparaissent sous le nom « Windows PowerShell » tant que Snapit n'est pas installé.
+
 ### Phase 2 — Capture native
 
 **Avancée et faite en partie dans Electron (20/11/2026)** :

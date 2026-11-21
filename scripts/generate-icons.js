@@ -110,3 +110,6 @@ for (const [name, size] of Object.entries(files)) {
   fs.writeFileSync(path.join(OUT, name), render(size));
   console.log(`assets/${name} (${size}×${size})`);
 }
+// copie pour les pages (éditeur, paramètres) : la version Tauri ne sert que le dossier src/
+fs.copyFileSync(path.join(OUT, 'icon.png'), path.join(__dirname, '..', 'src', 'icon.png'));
+console.log('src/icon.png');

@@ -73,6 +73,10 @@ window.snapit.onOverlayShow(async ({ dataUrl, hint: text, labels: texts, regions
 window.snapit.onOverlayReset(() => {
   active = false;
   reset();
+  // l'overlay reste prêt pour la capture suivante, mais sans garder l'image ni le dessin en mémoire
+  shot.removeAttribute('src');
+  fx.width = 1;
+  fx.height = 1;
 });
 
 window.snapit.onOverlayScrollProgress((value) => {
