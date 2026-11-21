@@ -11,9 +11,13 @@
 //                                       capture défilante de l'élément n (voir « chain »), visible dans la zone
 //                                       [x, y, l, h] d'un écran à cette échelle ; l'image PNG va dans le fichier
 //            "stop"                     arrête la capture défilante en cours : ce qui est déjà capturé est gardé
+//            "grab <id> <x> <y> <l> <h> <fichier>"
+//                                       capture la zone [x, y, l, h] de l'écran ; ses pixels bruts (BGRA, opaques,
+//                                       ligne par ligne) vont dans le fichier
 //   sortie : "ready" au démarrage, puis une ligne JSON par demande :
 //            {"id":1,"windows":[{"hwnd":…,"frame":[x,y,l,h],"client":[x,y,l,h],"children":[[x,y,l,h,parent],…]},…]}
 //            {"id":2,"chain":[[x,y,l,h,"Type",n],…]}
+//            {"id":4,"grab":{"width":…,"height":…}}  ou  {"id":4,"error":"…"}
 //            {"id":3,"progress":0.42}…  puis  {"id":3,"done":{"width":…,"height":…,"end":"bottom"}}  ou  {"id":3,"error":"…"}
 //   « end » : "bottom" (bas de la page atteint), "stopped" (arrêtée), "limit" (image trop haute), "interrupted".
 //   « parent » : indice de la sous-fenêtre parente dans la liste, -1 pour la fenêtre elle-même.
@@ -136,6 +140,11 @@ static class Regions
                 {
                     stopScroll = true;
                 }
+                else if (parts[0] == "grab" && parts.Length >= 7)
+                {
+                    Send(GrabScreen(line.Split(new[] { ' ' }, 7))); // le chemin du fichier peut contenir des espaces
+                    GC.Collect(); // libère tout de suite l'image (plusieurs Mo), une fois la réponse envoyée
+                }
             }
         }
         catch { }
@@ -145,6 +154,43 @@ static class Regions
     static void Send(string text)
     {
         lock (output) { Console.Out.WriteLine(text); Console.Out.Flush(); }
+    }
+
+    // ------------------------------------------------------------------ capture d'écran
+
+    // Capture d'une zone de l'écran (pixels physiques), bien plus rapide que celle d'Electron. Les fenêtres retirées
+    // des captures (WDA_EXCLUDEFROMCAPTURE : celles de Snapit pendant la capture) n'y figurent pas.
+    static string GrabScreen(string[] p)
+    {
+        string id = p[1];
+        try
+        {
+            int x = int.Parse(p[2], CultureInfo.InvariantCulture), y = int.Parse(p[3], CultureInfo.InvariantCulture);
+            int w = int.Parse(p[4], CultureInfo.InvariantCulture), h = int.Parse(p[5], CultureInfo.InvariantCulture);
+            if (w <= 0 || h <= 0) throw new FormatException();
+            var bytes = new byte[w * h * 4];
+            using (var bitmap = new Drawing.Bitmap(w, h, PixelFormat.Format32bppRgb))
+            {
+                using (var g = Drawing.Graphics.FromImage(bitmap))
+                    g.CopyFromScreen(x, y, 0, 0, new Drawing.Size(w, h), Drawing.CopyPixelOperation.SourceCopy);
+                var data = bitmap.LockBits(new Drawing.Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+                try
+                {
+                    for (int row = 0; row < h; row++) Marshal.Copy(data.Scan0 + row * data.Stride, bytes, row * w * 4, w * 4);
+                }
+                finally
+                {
+                    bitmap.UnlockBits(data);
+                }
+            }
+            for (int i = 3; i < bytes.Length; i += 4) bytes[i] = 255; // opaque
+            System.IO.File.WriteAllBytes(p[6], bytes);
+            return "{\"id\":" + id + ",\"grab\":{\"width\":" + w + ",\"height\":" + h + "}}";
+        }
+        catch (Exception e)
+        {
+            return "{\"id\":" + id + ",\"error\":\"" + e.GetType().Name + "\"}";
+        }
     }
 
     // ------------------------------------------------------------------ fenêtres

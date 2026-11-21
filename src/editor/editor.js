@@ -1991,18 +1991,14 @@ async function writeAutosave(snap) {
   }
 }
 
-// À la fermeture de la fenêtre : envoi synchrone de tout ce qui n'est pas confirmé sur le disque
-// (y compris un enregistrement encore en cours d'encodage, qui n'aura pas le temps d'aboutir).
-function flushAutosaveSync() {
-  clearTimeout(autosave.timer);
-  if (!api || !state.libraryId || autosave.rev <= autosave.savedRev) return;
-  const snap = autosaveSnapshot(autosave.savedBase);
-  api.librarySaveSync({
-    ...saveFields(snap),
-    image: snap.out.toDataURL('image/png'),
-    thumb: snap.thumb.toDataURL('image/jpeg', 0.85),
-    base: snap.base && snap.base.toDataURL('image/png'),
-  });
+// À la fermeture de la fenêtre : enregistre tout ce qui n'est pas encore confirmé sur le disque, avec un second
+// essai si le premier échoue. Renvoie vrai si des modifications restent non enregistrées.
+async function saveBeforeClose() {
+  commitTextEdit();
+  if (!state.libraryId) return state.dirty && Boolean(state.base);
+  await flushAutosave();
+  if (autosave.savedRev < autosave.rev) await flushAutosave();
+  return autosave.savedRev < autosave.rev;
 }
 
 function thumbnailOf(source) {
@@ -2386,18 +2382,26 @@ stage.addEventListener(
   { passive: false },
 );
 window.addEventListener('resize', () => state.fit && layout());
-window.addEventListener('beforeunload', (e) => {
-  if (state.libraryId) {
-    // capture de la bibliothèque : ses dernières modifications sont enregistrées, rien à demander
-    commitTextEdit();
-    flushAutosaveSync();
-    return;
-  }
-  if (state.dirty && state.base) {
-    e.preventDefault();
-    e.returnValue = '';
-  }
-});
+if (api) {
+  // Fermeture de la fenêtre : l'application attend la réponse pour fermer, ou demander confirmation
+  // (une capture de la bibliothèque est enregistrée, rien à demander).
+  api.onCloseRequest(async () => {
+    let unsaved = true;
+    try {
+      unsaved = await saveBeforeClose();
+    } finally {
+      api.closeReady({ unsaved });
+    }
+  });
+} else {
+  // dans un navigateur (mode démo) : avertissement classique avant de quitter la page
+  window.addEventListener('beforeunload', (e) => {
+    if (state.dirty && state.base) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+}
 
 // ------------------------------------------------------------- langue, état
 

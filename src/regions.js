@@ -3,7 +3,8 @@
 // Détection des fenêtres et des éléments d'interface pour la sélection de zone, comme dans Snagit.
 // Un assistant natif (src/native/regions.cs) décrit, en pixels physiques de l'écran virtuel, les fenêtres
 // visibles au moment de la capture puis, à la demande, les éléments d'interface sous la souris.
-// Il réalise aussi la capture défilante d'une page web ou d'une zone qui défile.
+// Il réalise aussi la capture d'écran (bien plus rapide que celle d'Electron) et la capture défilante d'une page web
+// ou d'une zone qui défile.
 const { spawn } = require('child_process');
 const { buildHelper } = require('./native/helper');
 
@@ -12,6 +13,7 @@ const { buildHelper } = require('./native/helper');
 const REFERENCES = ['WPF\\UIAutomationClient.dll', 'WPF\\UIAutomationTypes.dll', 'WPF\\WindowsBase.dll', 'System.Drawing.dll'];
 const WINDOWS_TIMEOUT = 500; // ms : au-delà, la capture se fait sans détection
 const PROBE_TIMEOUT = 1500;
+const GRAB_TIMEOUT = 3000; // ms : au-delà, la capture passe par Electron
 const SCROLL_TIMEOUT = 20000; // ms sans nouvelles de la capture défilante (chaque pas en donne)
 
 class Regions {
@@ -126,6 +128,13 @@ class Regions {
   async scrollCapture(n, [x, y, w, h], scale, file, onProgress) {
     const message = await this.request((id) => `scroll ${id} ${n} ${scale} ${x} ${y} ${w} ${h} ${file}\n`, SCROLL_TIMEOUT, onProgress);
     return message?.done ?? null;
+  }
+
+  // Capture la zone [x, y, l, h] de l'écran (pixels physiques) : ses pixels bruts (BGRA, opaques) vont dans `file`.
+  // Renvoie { width, height }, ou null si l'assistant n'est pas disponible ou a échoué.
+  async grab([x, y, w, h], file) {
+    const message = await this.request((id) => `grab ${id} ${x} ${y} ${w} ${h} ${file}\n`, GRAB_TIMEOUT);
+    return message?.grab ?? null;
   }
 
   // Arrête la capture défilante en cours : ce qui est déjà capturé est gardé.

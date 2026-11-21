@@ -11,6 +11,7 @@
     "icons": "node scripts/generate-icons.js",
     "smoke": "electron scripts/smoke-test.js",
     "scroll-test": "electron scripts/scroll-test.js",
+    "measure": "electron scripts/measure.js",
     "dist": "electron-builder --win"
   },
   "build": {

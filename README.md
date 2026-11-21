@@ -45,6 +45,10 @@ celle des éléments d'interface grâce à UI Automation (l'interface d'accessib
 positions et des types d'éléments, jamais de texte. L'option « Détecter les fenêtres et les zones sous la souris »
 des paramètres la désactive : un clic capture alors l'écran entier, comme avant.
 
+Ce même assistant réalise la capture de l'écran elle-même, en quelques dizaines de millisecondes. Les fenêtres de
+Snapit restent affichées mais sont retirées de l'image (Windows 10 2004 et suivants), si bien que l'overlay
+apparaît presque instantanément. Si l'assistant n'est pas disponible, la capture passe par Electron, plus lente.
+
 ### Capturer toute la page (capture défilante)
 
 Comme dans Snagit, quand la souris survole une page web qui défile (Chrome, Edge…), un bouton
@@ -182,6 +186,9 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
   latérale collante, barre latérale presque pleine hauteur, bouton flottant), sans overlay ni touches simulées :
   l'image doit couvrir toute la page, chaque bande à sa place, la barre latérale une seule fois. Images dans
   `%TEMP%\snapit-scroll-test`.
+- `npm run measure` : mesures de performance (démarrage, délai avant l'overlay et son détail, capture plein
+  écran, mémoire, taille de l'installeur), avec un profil et une bibliothèque à part. Résultats dans
+  `%TEMP%\snapit-measure\mesures.json`. Voir `docs/plan-migration-tauri.md`.
 - `npm run icons` : régénère les icônes de `assets/`.
 - `npm run dist` : construit l'installateur Windows dans `dist/`.
 - `F12` ouvre les outils de développement (hors version packagée).

@@ -155,18 +155,24 @@ function createEditor(payload) {
     if (entry) entry.focusedAt = Date.now();
   });
 
-  // L'éditeur bloque la fermeture s'il reste des annotations non enregistrées.
-  win.webContents.on('will-prevent-unload', (e) => {
-    const choice = dialog.showMessageBoxSync(win, {
-      type: 'question',
-      buttons: [t('unsaved.close'), t('unsaved.cancel')],
-      defaultId: 1,
-      cancelId: 1,
-      title: 'Snapit',
-      message: t('unsaved.message'),
-      detail: t('unsaved.detail'),
+  // Fermeture en deux temps, sans appel synchrone : l'éditeur enregistre d'abord ce qui reste, puis répond
+  // s'il garde des modifications non enregistrées (la fermeture est alors confirmée par l'utilisateur).
+  let closeAllowed = false;
+  let closing = null;
+  win.on('close', (e) => {
+    if (closeAllowed || win.webContents.isLoading() || win.webContents.isCrashed()) return;
+    e.preventDefault();
+    closing ??= requestEditorClose(win).then(({ unsaved }) => {
+      closing = null;
+      if (win.isDestroyed()) return;
+      if (unsaved && !confirmCloseUnsaved(win)) {
+        quitting = false; // « Annuler » interrompt aussi la fermeture de Snapit
+        return;
+      }
+      closeAllowed = true;
+      win.close();
+      if (quitting) app.quit(); // la fermeture empêchée a interrompu « Quitter » : on le relance
     });
-    if (choice === 0) e.preventDefault();
   });
 
   win.on('closed', () => {
@@ -184,6 +190,38 @@ function createEditor(payload) {
 
   win.loadFile(path.join(__dirname, 'editor', 'index.html'));
   return win;
+}
+
+// Délai laissé à l'éditeur pour enregistrer avant de fermer (une capture défilante très haute est longue à encoder).
+const CLOSE_TIMEOUT = 10000;
+const closeRequests = new Map(); // webContents.id -> resolve
+
+// Demande à l'éditeur d'enregistrer ce qui reste ; se résout avec sa réponse, ou sans réponse s'il ne répond pas.
+function requestEditorClose(win) {
+  const id = win.webContents.id;
+  return new Promise((resolve) => {
+    const done = (result = {}) => {
+      clearTimeout(timer);
+      closeRequests.delete(id);
+      resolve(result);
+    };
+    const timer = setTimeout(done, CLOSE_TIMEOUT);
+    closeRequests.set(id, done);
+    win.webContents.send('editor:close-request');
+  });
+}
+
+function confirmCloseUnsaved(win) {
+  const choice = dialog.showMessageBoxSync(win, {
+    type: 'question',
+    buttons: [t('unsaved.close'), t('unsaved.cancel')],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'Snapit',
+    message: t('unsaved.message'),
+    detail: t('unsaved.detail'),
+  });
+  return choice === 0;
 }
 
 function liveEditors() {
@@ -290,10 +328,6 @@ function onSettingsChanged(next, previous) {
   }
   if (next.language !== previous.language) destroyOverlays();
   if (next.libraryFolder !== previous.libraryFolder) sendToEditors('library:changed', { type: 'reset' });
-  if (next.detectRegions !== previous.detectRegions) {
-    if (next.detectRegions) regions.start();
-    else regions.stop();
-  }
   refreshTray();
   broadcast();
 }
@@ -302,8 +336,36 @@ function onSettingsChanged(next, previous) {
 // Capture
 // ---------------------------------------------------------------------------
 
+// Capture de chaque écran, à sa résolution physique : par l'assistant natif (quelques dizaines de millisecondes),
+// sinon par Electron (plus d'une seconde).
 async function grabDisplays() {
   const displays = screen.getAllDisplays();
+  return (await grabDisplaysNative(displays)) ?? grabDisplaysElectron(displays);
+}
+
+async function grabDisplaysNative(displays) {
+  if (!regions?.child) {
+    regions?.start(); // prêt pour la capture suivante
+    return null;
+  }
+  const captures = [];
+  for (const [i, display] of displays.entries()) {
+    const { x, y, width, height } = screen.dipToScreenRect(null, display.bounds);
+    const file = path.join(app.getPath('temp'), `snapit-${process.pid}-${i}.raw`);
+    try {
+      const size = await regions.grab([x, y, width, height], file);
+      if (!size) return null;
+      captures.push({ display, image: nativeImage.createFromBitmap(await fs.readFile(file), size) });
+    } catch {
+      return null;
+    } finally {
+      fs.rm(file, { force: true }).catch(() => {});
+    }
+  }
+  return captures;
+}
+
+async function grabDisplaysElectron(displays) {
   const pixelSize = (d) => ({
     width: Math.round(d.bounds.width * d.scaleFactor),
     height: Math.round(d.bounds.height * d.scaleFactor),
@@ -330,9 +392,7 @@ async function grabDisplays() {
 }
 
 function hideWindowsForCapture() {
-  const windows = [...liveEditors().map((e) => e.win), settingsWindow].filter(
-    (w) => w && !w.isDestroyed() && w.isVisible() && !w.isMinimized(),
-  );
+  const windows = visibleWindows();
   windows.forEach((w) => w.hide());
   return windows;
 }
@@ -341,20 +401,44 @@ function restoreWindows(hidden) {
   hidden.filter((w) => !w.isDestroyed()).forEach((w) => w.showInactive());
 }
 
-async function startCapture(mode = 'region') {
+function visibleWindows() {
+  return [...liveEditors().map((e) => e.win), settingsWindow].filter((w) => w && !w.isDestroyed() && w.isVisible() && !w.isMinimized());
+}
+
+function windowHandle(win) {
+  const handle = win.getNativeWindowHandle();
+  return Number(handle.length >= 8 ? handle.readBigUInt64LE() : handle.readUInt32LE());
+}
+
+function setExcludedFromCapture(windows, excluded) {
+  windows.filter((w) => !w.isDestroyed()).forEach((w) => w.setContentProtection(excluded));
+}
+
+// `fromMenu` : capture lancée depuis le menu de la zone de notification, qui doit d'abord disparaître de l'écran.
+async function startCapture(mode = 'region', { fromMenu = false } = {}) {
   if (capturing) return;
   capturing = true;
-  const hidden = hideWindowsForCapture();
+  // Windows 10 2004 et suivants : nos fenêtres sont retirées de la capture native sans être cachées, donc sans
+  // attendre qu'elles disparaissent ; elles le sont ensuite, sous l'overlay. Pour la capture différée, elles sont
+  // cachées tout de suite, pour libérer l'écran pendant le compte à rebours.
+  const excluded = EXCLUDE_FROM_CAPTURE && mode !== 'delay' && Boolean(regions?.child) ? visibleWindows() : [];
+  let hidden = excluded.length ? [] : hideWindowsForCapture();
+  setExcludedFromCapture(excluded, true);
   try {
     if (mode === 'delay') {
       await delay(settings.get().captureDelay * 1000);
       mode = 'region';
     }
     // Laisse le temps à Windows de retirer nos fenêtres (et le menu de la zone de notification) de l'écran.
-    await delay(hidden.length ? 250 : 180);
+    if (fromMenu || hidden.length) await delay(hidden.length ? 250 : 180);
+    else if (excluded.length) await delay(16); // une image de l'écran : l'exclusion de la capture est prise en compte
     // les fenêtres visibles sont relevées en même temps que l'image, pour la détection de zone
     const detect = mode === 'region' && settings.get().detectRegions;
-    const [captures, windows] = await Promise.all([grabDisplays(), detect ? regions.windows() : null]);
+    const [captures, found] = await Promise.all([grabDisplays(), detect ? regions.windows() : null]);
+    setExcludedFromCapture(excluded, false);
+    // nos fenêtres restées affichées ne sont pas sur l'image : elles ne doivent pas non plus être détectées
+    const ours = new Set(excluded.filter((w) => !w.isDestroyed()).map(windowHandle));
+    const windows = found && found.filter((w) => !ours.has(w.hwnd));
     if (!captures.length) throw new Error(t('error.noScreen'));
 
     let result;
@@ -363,7 +447,11 @@ async function startCapture(mode = 'region') {
       const c = captures.find((c) => c.display.id === target.id) ?? captures[0];
       result = { image: c.image, scaleFactor: c.display.scaleFactor };
     } else {
-      result = await selectRegion(captures, windows);
+      // nos fenêtres sont cachées une fois l'overlay affiché par-dessus : elles ne disparaissent pas à l'écran, et
+      // n'empêchent ni la détection des zones ni la capture défilante des fenêtres qu'elles recouvrent
+      result = await selectRegion(captures, windows, () => {
+        if (excluded.length) hidden = hideWindowsForCapture();
+      });
     }
 
     restoreWindows(hidden);
@@ -372,6 +460,7 @@ async function startCapture(mode = 'region') {
     restoreWindows(hidden);
     dialog.showErrorBox(t('error.capture'), String(err?.message ?? err));
   } finally {
+    setExcludedFromCapture(excluded, false);
     capturing = false;
   }
 }
@@ -511,7 +600,8 @@ function windowsOn(c, windows) {
     .filter((w) => w.frame);
 }
 
-function selectRegion(captures, windows = null) {
+// `onShown` : appelé une fois les overlays affichés.
+function selectRegion(captures, windows = null, onShown = null) {
   return new Promise((resolve) => {
     session = { captures, resolve, scrolling: false };
     globalShortcut.register('Escape', cancelSelection);
@@ -552,6 +642,7 @@ function selectRegion(captures, windows = null) {
       if (session?.resolve !== resolve) return;
       const cursor = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
       const active = overlays.get(cursor.id) ?? [...overlays.values()][0];
+      onShown?.();
       active?.win.focus();
     });
   });
@@ -702,14 +793,8 @@ ipcMain.handle('editor:show', (e, payload) => {
 ipcMain.handle('library:list', () => library.list());
 ipcMain.handle('library:open', (e, id, newWindow) => openFromLibrary(id, editors.get(e.sender.id), newWindow));
 ipcMain.handle('library:save', (_e, data) => library.save(data));
-// Dernier enregistrement, envoyé pendant la fermeture de la fenêtre
-ipcMain.on('library:save-sync', (e, data) => {
-  try {
-    e.returnValue = library.save(data);
-  } catch {
-    e.returnValue = false;
-  }
-});
+// Réponse de l'éditeur à une demande de fermeture, une fois ses dernières modifications enregistrées
+ipcMain.on('editor:close-ready', (e, result) => closeRequests.get(e.sender.id)?.({ unsaved: Boolean(result?.unsaved) }));
 ipcMain.handle('library:remove', (_e, id) => library.remove(id));
 ipcMain.handle('library:copy', async (_e, id) => writeClipboardPng(await fs.readFile(library.imagePath(id))));
 ipcMain.handle('library:reveal', (_e, id) => {
@@ -831,8 +916,8 @@ ipcMain.on('shortcuts:record-stop', () => hotkeys.stopRecording());
 function buildTrayMenu() {
   const accel = (action) => settings.get().shortcuts[action] || undefined;
   const template = [
-    { label: t('tray.region'), accelerator: accel('region'), registerAccelerator: false, click: () => startCapture('region') },
-    { label: t('tray.fullscreen'), accelerator: accel('fullscreen'), registerAccelerator: false, click: () => startCapture('fullscreen') },
+    { label: t('tray.region'), accelerator: accel('region'), registerAccelerator: false, click: () => startCapture('region', { fromMenu: true }) },
+    { label: t('tray.fullscreen'), accelerator: accel('fullscreen'), registerAccelerator: false, click: () => startCapture('fullscreen', { fromMenu: true }) },
     { label: t('tray.delay', { s: settings.get().captureDelay }), accelerator: accel('delay'), registerAccelerator: false, click: () => startCapture('delay') },
     { type: 'separator' },
     { label: t('tray.editor'), click: showEditor },
@@ -888,7 +973,7 @@ app.whenReady().then(() => {
   hotkeys.init(); // compile/démarre l'assistant clavier en arrière-plan, puis réapplique les raccourcis
 
   regions = new Regions({ helperDir: path.join(app.getPath('userData'), 'bin') });
-  if (settings.get().detectRegions) regions.start(); // prêt dès la première capture
+  regions.start(); // capture d'écran et détection des zones : prêt dès la première capture
 
   createTray();
   nativeTheme.on('updated', broadcast);

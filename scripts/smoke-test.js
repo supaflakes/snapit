@@ -383,11 +383,32 @@ app.whenReady().then(async () => {
       target.destroy();
     }
 
-    // 1. Plein écran : l'image doit arriver dans l'éditeur vide existant
+    // 1. Plein écran : l'image doit arriver dans l'éditeur vide existant. L'éditeur, rempli de magenta, reste
+    // affiché pendant la capture (retiré de la capture plutôt que caché) : il ne doit pas figurer sur l'image.
+    home.show();
+    await home.webContents.executeJavaScript(`(() => {
+      const veil = document.createElement('div');
+      veil.id = 'smoke-veil';
+      veil.style.cssText = 'position:fixed;inset:0;background:#ff00ff;z-index:99999';
+      document.body.append(veil);
+    })()`);
+    await wait(300);
+    const homeBounds = home.getBounds();
+    const capturedAt = performance.now();
     await snapit.startCapture('fullscreen');
+    const fullscreenMs = performance.now() - capturedAt;
+    await home.webContents.executeJavaScript(`document.getElementById('smoke-veil').remove()`);
     await wait(1200);
     const full = await home.webContents.executeJavaScript('[document.body.classList.contains("has-image"), canvas.width, canvas.height]');
-    check('capture plein écran chargée dans l’éditeur', full[0] && full[1] > 0, `${full[1]}×${full[2]}`);
+    check('capture plein écran chargée dans l’éditeur', full[0] && full[1] > 0, `${full[1]}×${full[2]}, ${Math.round(fullscreenMs)} ms`);
+    const homeDisplay = screen.getDisplayMatching(homeBounds);
+    const centre = await home.webContents.executeJavaScript(`(() => {
+      const c = state.base.getContext('2d');
+      const x = Math.round((${homeBounds.x + homeBounds.width / 2 - homeDisplay.bounds.x}) * ${homeDisplay.scaleFactor});
+      const y = Math.round((${homeBounds.y + homeBounds.height / 2 - homeDisplay.bounds.y}) * ${homeDisplay.scaleFactor});
+      return Array.from(c.getImageData(x, y, 1, 1).data.slice(0, 3)).join(',');
+    })()`);
+    check('l’éditeur affiché ne figure pas sur la capture', centre !== '255,0,255', `pixel au centre de l'éditeur : ${centre}`);
     const copied = await clipboardImageSize();
     check('capture copiée dans le presse-papiers', copied?.width === full[1] && copied?.height === full[2], copied && `${copied.width}×${copied.height}`);
     await savePage(home, '1-plein-ecran.png');
