@@ -10,6 +10,7 @@ mod editors;
 mod helpers;
 mod hotkeys;
 mod i18n;
+mod keyhook;
 mod images;
 mod library;
 mod measure;
@@ -261,6 +262,7 @@ fn on_hotkey_line(line: String) {
             tauri::async_runtime::spawn(async move { capture::start_capture(&action, false).await });
         }
         hotkeys::HotkeyEvent::Recorded(accelerator) => {
+            selftest::recorded(&accelerator);
             let _ = app().handle.emit_to("settings", "shortcuts:recorded", accelerator);
         }
         hotkeys::HotkeyEvent::None => {}
@@ -316,11 +318,13 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let a = app();
     allow_library_folder();
     {
+        // rien n'est enregistré avant le hook : un raccourci Impr. écran enregistré auprès de Windows lui
+        // prendrait la touche
         let s = a.settings.get();
-        a.hotkeys.lock().unwrap().apply(&s.shortcuts, s.override_snipping_tool);
+        a.hotkeys.lock().unwrap().configure(&s.shortcuts, s.override_snipping_tool);
     }
-    // compile/démarre l'assistant clavier en arrière-plan, puis réapplique les raccourcis
-    hotkeys::init(&a.hotkeys, dir.join("bin"), on_hotkey_line, broadcast);
+    // hook clavier (Impr. écran prioritaire sur l'Outil Capture), puis raccourcis
+    std::thread::spawn(|| hotkeys::init(&app().hotkeys, on_hotkey_line, broadcast)); // sans retarder l'éditeur
     a.regions.start(); // détection des zones : prêt dès la première capture
     dxgi::warm_up(); // duplications du bureau ouvertes d'avance
     create_tray(handle)?;
@@ -333,6 +337,10 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
+    // processus du hook clavier, lancé par Snapit lui-même (voir keyhook.rs)
+    if std::env::args().any(|a| a == keyhook::ARG) {
+        std::process::exit(keyhook::run_helper());
+    }
     measure::mark_start();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_, _, _| editors::show()))

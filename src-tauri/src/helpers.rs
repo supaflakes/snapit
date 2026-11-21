@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 
 use crate::win::CREATE_NO_WINDOW;
 
-pub const KEYHOOK_SOURCE: &str = include_str!("../../src/native/keyhook.cs");
 pub const REGIONS_SOURCE: &str = include_str!("../../src/native/regions.cs");
 // UI Automation et les types WPF qu'il utilise, et GDI+ pour la capture défilante
 pub const REGIONS_REFERENCES: &[&str] = &[r"WPF\UIAutomationClient.dll", r"WPF\UIAutomationTypes.dll", r"WPF\WindowsBase.dll", "System.Drawing.dll"];
@@ -67,7 +66,12 @@ pub struct LineProcess {
 impl LineProcess {
     /// Démarre l'assistant ; `on_line` reçoit chaque ligne (dans un fil dédié), `on_exit` est appelé à sa fin.
     pub fn spawn(exe: &Path, on_line: impl Fn(String) + Send + 'static, on_exit: impl FnOnce() + Send + 'static) -> Result<Arc<Self>, String> {
+        Self::spawn_with(exe, &[], on_line, on_exit)
+    }
+
+    pub fn spawn_with(exe: &Path, args: &[&str], on_line: impl Fn(String) + Send + 'static, on_exit: impl FnOnce() + Send + 'static) -> Result<Arc<Self>, String> {
         let mut child = Command::new(exe)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

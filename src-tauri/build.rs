@@ -17,7 +17,6 @@ fn export_i18n() {
 
 fn main() {
     export_i18n();
-    println!("cargo:rerun-if-changed=../src/native/keyhook.cs");
     println!("cargo:rerun-if-changed=../src/native/regions.cs");
     println!("cargo:rerun-if-changed=../src/bridge.js");
     tauri_build::build()

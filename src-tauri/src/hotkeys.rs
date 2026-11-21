@@ -1,15 +1,15 @@
 // Raccourcis globaux de capture (comme src/hotkeys.js).
-// Les combinaisons avec Impr. écran passent par l'assistant clavier (hook bas niveau, keyhook.cs) pour garder la
-// priorité sur l'Outil Capture de Windows ; les autres par le plugin global-shortcut de Tauri.
+// Les combinaisons avec Impr. écran passent par le hook clavier bas niveau (keyhook.rs) pour garder la priorité
+// sur l'Outil Capture de Windows ; les autres par le plugin global-shortcut de Tauri.
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
-use crate::helpers::{build_helper, LineProcess, KEYHOOK_SOURCE};
+use crate::helpers::LineProcess;
+use crate::keyhook::Combo;
+use std::sync::Arc;
 use crate::settings::Shortcuts;
 
 const WIN: u32 = 8;
@@ -81,7 +81,7 @@ fn accelerator_from(mods: u32, key: &str) -> String {
 
 pub struct Hotkeys {
     app: AppHandle,
-    helper: Option<Arc<LineProcess>>,
+    hook: Option<Arc<LineProcess>>, // processus du hook clavier (keyhook.rs)
     pub hook_ready: bool,
     pub hook_failed: bool,
     recording: bool,
@@ -94,7 +94,7 @@ impl Hotkeys {
     pub fn new(app: AppHandle) -> Self {
         Hotkeys {
             app,
-            helper: None,
+            hook: None,
             hook_ready: false,
             hook_failed: false,
             recording: false,
@@ -102,10 +102,6 @@ impl Hotkeys {
             status: BTreeMap::new(),
             registered: HashMap::new(),
         }
-    }
-
-    pub fn helper_pid(&self) -> Option<u32> {
-        self.helper.as_ref().map(|h| h.pid)
     }
 
     /// Action d'un raccourci du plugin (ou « escape » pendant une sélection).
@@ -145,6 +141,11 @@ impl Hotkeys {
         }
     }
 
+    /// Raccourcis à appliquer, sans rien enregistrer encore (voir `init`).
+    pub fn configure(&mut self, shortcuts: &Shortcuts, override_tool: bool) {
+        self.config = (shortcuts.clone(), override_tool);
+    }
+
     pub fn apply(&mut self, shortcuts: &Shortcuts, override_tool: bool) {
         self.unregister_all();
         self.config = (shortcuts.clone(), override_tool);
@@ -162,38 +163,35 @@ impl Hotkeys {
                 status.insert(action.into(), "conflict".into());
                 continue;
             };
-            // Impr. écran et les combinaisons avec Win (réservées par Windows) passent par l'assistant
+            // Impr. écran et les combinaisons avec Win (réservées par Windows) passent par le hook
             let vk = virtual_key(&key);
             let via_hook = key == "PrintScreen" || mods & WIN != 0;
             if let (true, Some(vk), true, true) = (via_hook, vk, override_tool, self.hook_ready) {
-                combos.push(format!("{action}:{mods}:{vk}"));
+                combos.push((action.to_string(), mods, vk));
                 status.insert(action.into(), "hook".into());
                 continue;
             }
             let ok = self.register(accelerator, action);
             status.insert(action.into(), if ok { "ok" } else { "conflict" }.into());
         }
-        let snipping = format!(":{}:{}", SNIPPING.0, SNIPPING.1);
-        if override_tool && self.hook_ready && !combos.iter().any(|c| c.ends_with(&snipping)) {
-            combos.push(format!("region{snipping}"));
+        if override_tool && self.hook_ready && !combos.iter().any(|(_, m, v)| (*m, *v) == SNIPPING) {
+            combos.push(("region".into(), SNIPPING.0, SNIPPING.1));
         }
-        if let Some(helper) = &self.helper {
-            helper.write(&format!("set {}\n", combos.join(" ")));
+        if self.hook_ready {
+            self.send_combos(&combos);
         }
         self.status = status;
     }
 
     // Pendant l'enregistrement d'un raccourci, les raccourcis sont suspendus pour que la fenêtre des paramètres
-    // reçoive les touches ; Impr. écran est remonté par l'assistant.
+    // reçoive les touches ; Impr. écran est remonté par le hook.
     pub fn start_recording(&mut self) {
         self.recording = true;
         self.unregister_all();
-        let mut combos: Vec<String> = (0..16).map(|mods| format!("{RECORD_PREFIX}{mods}-{VK_SNAPSHOT}:{mods}:{VK_SNAPSHOT}")).collect();
+        let mut combos: Vec<Combo> = (0..16).map(|mods| (format!("{RECORD_PREFIX}{mods}-{VK_SNAPSHOT}"), mods, VK_SNAPSHOT)).collect();
         let (mods, vk) = SNIPPING;
-        combos.push(format!("{RECORD_PREFIX}{mods}-{vk}:{mods}:{vk}"));
-        if let Some(helper) = &self.helper {
-            helper.write(&format!("set {}\n", if self.hook_ready { combos.join(" ") } else { String::new() }));
-        }
+        combos.push((format!("{RECORD_PREFIX}{mods}-{vk}"), mods, vk));
+        self.send_combos(if self.hook_ready { &combos } else { &[] });
     }
 
     pub fn stop_recording(&mut self) {
@@ -205,7 +203,18 @@ impl Hotkeys {
         self.apply(&shortcuts, override_tool);
     }
 
-    /// Ligne de l'assistant : une capture à lancer, ou une touche enregistrée.
+    fn send_combos(&self, combos: &[Combo]) {
+        if let Some(hook) = &self.hook {
+            let list: Vec<String> = combos.iter().map(|(id, mods, vk)| format!("{id}:{mods}:{vk}")).collect();
+            hook.write(&format!("set {}\n", list.join(" ")));
+        }
+    }
+
+    pub fn hook_pid(&self) -> Option<u32> {
+        self.hook.as_ref().map(|h| h.pid)
+    }
+
+    /// Combinaison reconnue par le hook : une capture à lancer, ou une touche enregistrée.
     pub fn handle_line(&self, id: &str) -> HotkeyEvent {
         if let Some(rest) = id.strip_prefix(RECORD_PREFIX) {
             let mut parts = rest.split('-').filter_map(|p| p.parse::<u32>().ok());
@@ -222,8 +231,8 @@ impl Hotkeys {
 
     pub fn dispose(&mut self) {
         let _ = self.app.global_shortcut().unregister_all();
-        if let Some(helper) = self.helper.take() {
-            helper.stop();
+        if let Some(hook) = self.hook.take() {
+            hook.stop();
         }
     }
 }
@@ -234,61 +243,53 @@ pub enum HotkeyEvent {
     Recorded(String),
 }
 
-/// Démarre l'assistant clavier en arrière-plan, puis réapplique les raccourcis. Sans lui, tout passe par le plugin.
-pub fn init(hotkeys: &'static Mutex<Hotkeys>, dir: PathBuf, on_line: fn(String), on_change: fn()) {
-    std::thread::spawn(move || {
-        let ready = (|| -> Result<Arc<LineProcess>, String> {
-            let exe = build_helper(&dir, "keyhook", KEYHOOK_SOURCE, &[])?;
-            let (tx, rx) = std::sync::mpsc::channel::<bool>();
-            let tx_exit = tx.clone();
-            let process = LineProcess::spawn(
-                &exe,
-                move |line| match line.as_str() {
-                    "ready" => {
-                        let _ = tx.send(true);
-                    }
-                    "error" => {
-                        let _ = tx.send(false);
-                    }
-                    _ => on_line(line),
-                },
-                move || {
-                    let _ = tx_exit.send(false);
-                    // l'assistant s'est arrêté (antivirus, fin de session…) : repli sur le plugin
-                    let mut h = hotkeys.lock().unwrap();
-                    if h.helper.take().is_some() {
-                        h.hook_ready = false;
-                        h.hook_failed = true;
-                        let (shortcuts, override_tool) = h.config.clone();
-                        h.apply(&shortcuts, override_tool);
-                        drop(h);
-                        on_change();
-                    }
-                },
-            )?;
-            match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(true) => Ok(process),
-                _ => {
-                    process.stop();
-                    Err("assistant clavier indisponible".into())
+/// Lance le processus du hook clavier (ce même exécutable, avec `--keyhook`), puis réapplique les raccourcis.
+/// Sans lui, tout passe par le plugin.
+pub fn init(hotkeys: &'static Mutex<Hotkeys>, on_combo: fn(String), on_change: fn()) {
+    let started = (|| -> Result<Arc<LineProcess>, String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let tx_exit = tx.clone();
+        let process = LineProcess::spawn_with(
+            &exe,
+            &[crate::keyhook::ARG],
+            move |line| match line.as_str() {
+                "ready" => {
+                    let _ = tx.send(true);
                 }
-            }
-        })();
-        let mut h = hotkeys.lock().unwrap();
-        match ready {
-            Ok(process) => {
-                h.helper = Some(process);
-                h.hook_ready = true;
-                h.hook_failed = false;
-            }
-            Err(_) => {
-                h.hook_ready = false;
-                h.hook_failed = true;
+                "error" => {
+                    let _ = tx.send(false);
+                }
+                _ => on_combo(line),
+            },
+            move || {
+                let _ = tx_exit.send(false);
+                // le hook s'est arrêté (antivirus, fin de session…) : repli sur le plugin
+                let mut h = hotkeys.lock().unwrap();
+                if h.hook.take().is_some() {
+                    h.hook_ready = false;
+                    h.hook_failed = true;
+                    let (shortcuts, override_tool) = h.config.clone();
+                    h.apply(&shortcuts, override_tool);
+                    drop(h);
+                    on_change();
+                }
+            },
+        )?;
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(true) => Ok(process),
+            _ => {
+                process.stop();
+                Err("hook clavier indisponible".into())
             }
         }
-        let (shortcuts, override_tool) = h.config.clone();
-        h.apply(&shortcuts, override_tool);
-        drop(h);
-        on_change();
-    });
+    })();
+    let mut h = hotkeys.lock().unwrap();
+    h.hook_ready = started.is_ok();
+    h.hook_failed = started.is_err();
+    h.hook = started.ok();
+    let (shortcuts, override_tool) = h.config.clone();
+    h.apply(&shortcuts, override_tool);
+    drop(h);
+    on_change();
 }

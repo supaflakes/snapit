@@ -12,6 +12,12 @@ use crate::{app, capture, editors, images, win};
 
 static REPORT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static FAILURES: Mutex<u32> = Mutex::new(0);
+static RECORDED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Raccourci enregistré dans les paramètres (touche remontée par le hook).
+pub fn recorded(accelerator: &str) {
+    *RECORDED.lock().unwrap() = Some(accelerator.into());
+}
 
 pub fn enabled() -> bool {
     std::env::args().any(|a| a == "--selftest")
@@ -55,6 +61,40 @@ async fn until(timeout: Duration, test: impl Fn() -> bool) -> bool {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     false
+}
+
+// Appuie sur les touches (code virtuel, code de scan) dans l'ordre, puis les relâche dans l'ordre inverse, depuis
+// un autre processus (PowerShell), comme un vrai clavier.
+async fn press(keys: &[(u8, u8)]) {
+    use std::os::windows::process::CommandExt;
+    let flags = |vk: u8, up: bool| (if vk == 0x5b { 1 } else { 0 }) | (if up { 2 } else { 0 });
+    let mut script = vec![
+        "$sig = '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte vk, byte scan, uint flags, System.UIntPtr extra);'".to_string(),
+        "$k = Add-Type -MemberDefinition $sig -Name K -Namespace SnapitSelftest -PassThru".to_string(),
+    ];
+    for &(vk, scan) in keys {
+        script.push(format!("$k::keybd_event({vk}, {scan}, {}, [UIntPtr]::Zero)", flags(vk, false)));
+    }
+    script.push("Start-Sleep -Milliseconds 70".into());
+    for &(vk, scan) in keys.iter().rev() {
+        script.push(format!("$k::keybd_event({vk}, {scan}, {}, [UIntPtr]::Zero)", flags(vk, true)));
+    }
+    let script = script.join("
+");
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).creation_flags(crate::win::CREATE_NO_WINDOW).output()
+    })
+    .await;
+}
+
+fn count_processes(name: &str) -> usize {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {name}"), "/NH"])
+        .creation_flags(crate::win::CREATE_NO_WINDOW)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).matches(name).count())
+        .unwrap_or(0)
 }
 
 fn screenshot(name: &str) {
@@ -112,6 +152,29 @@ pub fn start() {
         check("assistant de détection des zones démarré", app().regions.running(), "");
         tokio::time::sleep(Duration::from_millis(800)).await;
         screenshot("0-editeur.png");
+
+        // Touches réelles : Impr. écran, puis Win+Maj+S (envoyé par beaucoup de claviers pour Impr. écran), doivent
+        // ouvrir la sélection de Snapit, et non l'Outil Capture de Windows.
+        for (label, keys) in [("Impr. écran ouvre la sélection Snapit", vec![(0x2c, 0)]), ("Win+Maj+S ouvre la sélection Snapit", vec![(0x5b, 0x5b), (0xa0, 0x2a), (0x53, 0x1f)])] {
+            let snipping_before = count_processes("ScreenClippingHost.exe");
+            press(&keys).await;
+            let opened = until(Duration::from_secs(4), || visible_overlay().is_some()).await;
+            check(label, opened, "");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            capture::cancel_selection();
+            until(Duration::from_secs(4), || !capturing()).await;
+            let snipping_after = count_processes("ScreenClippingHost.exe");
+            check("l'Outil Capture ne s'ouvre pas", snipping_after <= snipping_before, format!("{snipping_before} → {snipping_after}"));
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        // Enregistrement d'un raccourci dans les paramètres : Maj+Impr. écran est remontée par le hook
+        app().hotkeys.lock().unwrap().start_recording();
+        press(&[(0xa0, 0x2a), (0x2c, 0)]).await;
+        let recorded = until(Duration::from_secs(3), || RECORDED.lock().unwrap().is_some()).await;
+        app().hotkeys.lock().unwrap().stop_recording();
+        let value = RECORDED.lock().unwrap().clone().unwrap_or_default();
+        check("enregistrer un raccourci : Maj+Impr. écran", recorded && value == "Shift+PrintScreen", value);
+        check("aucune capture pendant l'enregistrement", visible_overlay().is_none() && !capturing(), "");
 
         // Aperçu JPEG de l'overlay : même taille et mêmes couleurs que la capture
         if let Ok(Some(m)) = app().handle.primary_monitor() {

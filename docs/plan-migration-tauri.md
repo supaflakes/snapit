@@ -177,6 +177,25 @@ sur l'Outil Capture, redirection de Win+Maj+S, enregistrement des raccourcis dan
 
 *Résultat : plus d'assistant clavier séparé, plus de compilation au premier lancement pour lui.*
 
+**Faite dans la version Tauri (20/11/2026), avec une différence** :
+
+- `keyhook.rs` : le hook clavier bas niveau est écrit en Rust, avec le même comportement que `keyhook.cs` :
+  - Impr. écran est prioritaire sur l'Outil Capture ;
+  - Win+Maj+S est redirigé vers la capture de zone, avec une touche neutre pour que le menu Démarrer ne s'ouvre
+    pas ;
+  - le hook remonte les touches lors de l'enregistrement d'un raccourci dans les paramètres.
+- Il ne peut pas tourner sur un fil du processus principal : Windows ne transmet pas Impr. écran au hook d'un
+  processus dont une fenêtre est au premier plan. Quand l'éditeur était actif, Impr. écran n'arrivait donc jamais.
+  C'est sans doute la raison de l'assistant séparé de la version Electron.
+- Le hook tourne donc dans un petit processus à part : **le même exécutable**, relancé avec `--keyhook`. Il n'y a
+  plus de C#, plus de compilation au premier lancement ni de console associée. Le processus occupe environ 9 Mo,
+  contre 14 Mo pour l'assistant C# plus 6 Mo de console. Il démarre en arrière-plan, sans retarder l'ouverture de
+  l'éditeur.
+- Autotest : Impr. écran et Win+Maj+S sont envoyées depuis un autre processus, comme un vrai clavier. Elles
+  doivent ouvrir la sélection de Snapit, sans lancer l'Outil Capture. Maj+Impr. écran doit aussi être enregistrée
+  comme nouveau raccourci dans les paramètres.
+- `src/native/keyhook.cs` reste utilisé par la version Electron.
+
 ### Phase 4 — Détection des zones et capture défilante en Rust
 
 1. `regions.rs` : énumération des fenêtres et sous-fenêtres, puis éléments sous la souris par UI Automation
