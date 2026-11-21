@@ -122,7 +122,9 @@ static class Regions
                 if (parts[0] == "windows" && parts.Length == 2)
                 {
                     ForgetScrollables(); // nouvelle sélection de zone
-                    Send(ListWindows(parts[1]));
+                    var visible = new List<IntPtr>();
+                    Send(ListWindows(parts[1], visible));
+                    WarmChromium(visible);
                 }
                 else if (parts[0] == "at" && parts.Length == 5)
                 {
@@ -195,7 +197,7 @@ static class Regions
 
     // ------------------------------------------------------------------ fenêtres
 
-    static string ListWindows(string id)
+    static string ListWindows(string id, List<IntPtr> visible)
     {
         var json = new StringBuilder();
         json.Append("{\"id\":").Append(id).Append(",\"windows\":[");
@@ -204,6 +206,7 @@ static class Regions
         {
             RECT frame;
             if (!IsCandidate(hwnd, out frame)) return true;
+            visible.Add(hwnd);
             if (!first) json.Append(',');
             first = false;
             json.Append("{\"hwnd\":").Append(hwnd.ToInt64()).Append(",\"frame\":");
@@ -317,7 +320,7 @@ static class Regions
             string chain;
             try
             {
-                chain = Chain(new IntPtr(long.Parse(request[2])), int.Parse(request[3]), int.Parse(request[4]));
+                chain = Probe(new IntPtr(long.Parse(request[2])), int.Parse(request[3]), int.Parse(request[4]));
             }
             catch
             {
@@ -341,7 +344,68 @@ static class Regions
     // commençant par les plus petites. Les conteneurs sans bords (Chrome range son interface dans des « Pane »
     // vides) et les enveloppes de même taille sont traversés. À taille presque égale, l'élément le plus profond
     // l'emporte : dans une fenêtre Electron, la page est plus grande d'un pixel qu'un panneau technique voisin.
-    static string Chain(IntPtr hwnd, int x, int y)
+    // Chromium (Chrome, Edge, applications Electron…) n'active son accessibilité complète, défilement compris,
+    // qu'après une première interrogation : une première recherche sur une page qui ne montre rien à faire
+    // défiler est refaite un peu plus tard.
+    static string Probe(IntPtr hwnd, int x, int y)
+    {
+        IntPtr target = DeepestChild(hwnd, x, y);
+        bool firstTime = IsChromium(target) && MarkWarmed(target);
+        bool scrolls;
+        string chain = Chain(hwnd, x, y, out scrolls);
+        if (firstTime && !scrolls)
+        {
+            Thread.Sleep(150);
+            chain = Chain(hwnd, x, y, out scrolls);
+        }
+        return chain;
+    }
+
+    static readonly HashSet<IntPtr> warmed = new HashSet<IntPtr>(); // pages Chromium déjà interrogées
+
+    // Vrai si la page n'avait encore jamais été interrogée.
+    static bool MarkWarmed(IntPtr page)
+    {
+        lock (warmed) return warmed.Add(page);
+    }
+
+    static bool IsChromium(IntPtr hwnd)
+    {
+        return ClassName(hwnd).StartsWith("Chrome_");
+    }
+
+    // Au début d'une sélection, les pages Chromium visibles sont interrogées une première fois, en arrière-plan,
+    // pendant que l'overlay se prépare : au premier survol, elles décrivent déjà ce qui défile.
+    static void WarmChromium(List<IntPtr> windows)
+    {
+        var pages = new List<IntPtr>();
+        foreach (IntPtr top in windows)
+        {
+            if (pages.Count >= 12) break;
+            if (!ClassName(top).StartsWith("Chrome_WidgetWin")) continue;
+            int before = pages.Count;
+            EnumChildWindows(top, (child, _) =>
+            {
+                if (ClassName(child) == "Chrome_RenderWidgetHostHWND" && IsWindowVisible(child)) pages.Add(child);
+                return true;
+            }, IntPtr.Zero);
+            if (pages.Count == before) pages.Add(top);
+        }
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            foreach (IntPtr page in pages)
+            {
+                if (!MarkWarmed(page)) continue;
+                try
+                {
+                    AutomationElement.FromHandle(page).FindAll(TreeScope.Children, Automation.ControlViewCondition);
+                }
+                catch { } // fenêtre fermée entre-temps
+            }
+        });
+    }
+
+    static string Chain(IntPtr hwnd, int x, int y, out bool scrolls)
     {
         var clock = Stopwatch.StartNew();
         var point = new Point(x, y);
@@ -409,7 +473,12 @@ static class Regions
             visible = r;
         }
         var json = new StringBuilder();
-        foreach (Found f in found) AppendElement(json, f);
+        scrolls = false;
+        foreach (Found f in found)
+        {
+            AppendElement(json, f);
+            if (f.Scroll > 0) scrolls = true;
+        }
         return json.ToString();
     }
 
