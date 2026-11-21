@@ -273,7 +273,7 @@ impl Library {
         };
         entry.rev = 0.0; // nouvelle session d'édition : l'éditeur recompte ses modifications
         Ok(json!({
-            "dataUrl": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png)),
+            "dataUrl": crate::capture::publish_image(png),
             "name": entry.name,
             "scaleFactor": entry.unit,
             "libraryId": id,

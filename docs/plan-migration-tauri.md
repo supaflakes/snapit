@@ -144,6 +144,32 @@ Reste à faire, en Rust :
 
 *Résultat : capture nettement plus rapide.*
 
+**Faite dans la version Tauri (20/11/2026)** :
+
+- `dxgi.rs` : duplication du bureau (DXGI Desktop Duplication), ouverte au démarrage et gardée sur un fil dédié, un
+  périphérique Direct3D par carte graphique (portables à deux cartes). L'écran est copié depuis la carte graphique
+  en **14 ms** au lieu de 65 ms avec GDI.
+- Limite constatée : retirer une fenêtre de la capture (WDA_EXCLUDEFROMCAPTURE) ne produit pas de nouvelle image
+  dans la duplication. Sur un écran où une fenêtre de Snapit est affichée, l'image vient donc de GDI, qui en tient
+  compte. GDI sert aussi de secours : écran tourné, écran HDR, bureau sécurisé, accès perdu.
+  Windows.Graphics.Capture n'a pas été retenu : il affiche une bordure jaune autour de l'écran capturé et demande
+  plus de temps pour démarrer une session.
+- Les fenêtres de Snapit sont retirées de l'image sans être cachées, puis cachées sous l'overlay (déjà fait en
+  phase 1) : il n'y a plus d'attente avant la capture, sauf les 180 ms du menu de la zone de notification.
+- L'éditeur reçoit ses images par le protocole `snapit://image/<n>.png` (chargées avec CORS pour que l'export
+  reste possible) au lieu d'une URL data: en base64 ; de même pour les captures rouvertes depuis la galerie.
+- Autotest : l'éditeur rempli de magenta reste affiché pendant une capture plein écran, et la vérification relève
+  0 pixel magenta sur toute sa zone.
+
+| | Avant la phase 2 | Après |
+| --- | --- | --- |
+| Raccourci → overlay, aucune fenêtre de Snapit à l'écran | 125 à 170 ms | **85 à 95 ms** |
+| Raccourci → overlay, éditeur affiché (GDI) | 125 à 170 ms | 145 à 200 ms |
+| Capture plein écran → éditeur | 220 à 250 ms | **189 à 193 ms** |
+
+Non vérifié : plusieurs écrans, échelles mixtes, écran tourné, écran HDR et portable à deux cartes graphiques
+(une seule configuration disponible pour les tests).
+
 ### Phase 3 — Raccourcis clavier natifs
 
 Porter `keyhook.cs` dans `hotkeys.rs`, sur un fil dédié du processus. Même comportement : Impr. écran prioritaire

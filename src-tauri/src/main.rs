@@ -5,6 +5,7 @@
 
 mod capture;
 mod commands;
+mod dxgi;
 mod editors;
 mod helpers;
 mod hotkeys;
@@ -321,6 +322,7 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // compile/démarre l'assistant clavier en arrière-plan, puis réapplique les raccourcis
     hotkeys::init(&a.hotkeys, dir.join("bin"), on_hotkey_line, broadcast);
     a.regions.start(); // détection des zones : prêt dès la première capture
+    dxgi::warm_up(); // duplications du bureau ouvertes d'avance
     create_tray(handle)?;
     if !std::env::args().any(|arg| arg == HIDDEN_ARG) {
         editors::create(None);

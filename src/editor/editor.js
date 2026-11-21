@@ -282,6 +282,8 @@ function setDirty(dirty) {
 // `libraryId` et `shapes` : capture rouverte depuis la bibliothèque, avec ses annotations.
 async function loadImage({ dataUrl, scaleFactor = 1, name, libraryId = null, shapes = [], copied = false, notice = null }) {
   const img = new Image();
+  // image servie par l'application (version Tauri) : chargée avec CORS pour que l'export reste possible
+  if (/^https?:/.test(dataUrl)) img.crossOrigin = 'anonymous';
   img.src = dataUrl;
   await img.decode();
   const base = document.createElement('canvas');

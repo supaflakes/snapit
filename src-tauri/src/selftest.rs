@@ -193,11 +193,42 @@ pub fn start() {
         }
 
         // 4. Plein écran : nouvel éditeur, copie dans le presse-papiers, galerie
+        // L'éditeur, rempli de magenta, reste affiché pendant la capture (retiré de l'image plutôt que caché) :
+        // il ne doit pas figurer sur l'image.
+        let editor = editors::create(None);
+        until(Duration::from_secs(5), || editor.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false))).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut area = None;
+        if let Some(w) = &editor {
+            let _ = w.eval("(() => { const v = document.createElement('div'); v.id = 'selftest-veil'; v.style.cssText = 'position:fixed;inset:0;background:#ff00ff;z-index:99999'; document.body.append(v); })()");
+            if let (Ok(p), Ok(s)) = (w.inner_position(), w.inner_size()) {
+                area = Some((p.x.max(0) as u32, p.y.max(0) as u32, s.width, s.height));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
         let before = app().library.lock().unwrap().list(&crate::library_folder()).len();
+        let started = Instant::now();
         capture::start_capture("fullscreen", false).await;
+        let elapsed = started.elapsed();
+        if let Some(w) = &editor {
+            let _ = w.eval("document.getElementById('selftest-veil')?.remove()");
+        }
         let opened = until(Duration::from_secs(5), || editor_with_image().is_some()).await;
-        check("capture plein écran ouverte dans l'éditeur", opened, "");
+        check("capture plein écran ouverte dans l'éditeur", opened, format!("{} ms", elapsed.as_millis()));
         let clip = images::read_clipboard();
+        if let (Some(c), Some((x0, y0, w, h))) = (&clip, area) {
+            let (mut magenta, mut total) = (0u32, 0u32);
+            for y in (y0 + 20..(y0 + h).saturating_sub(20).min(c.height())).step_by(13) {
+                for x in (x0 + 20..(x0 + w).saturating_sub(20).min(c.width())).step_by(17) {
+                    let px = c.get_pixel(x, y);
+                    total += 1;
+                    if px[0] > 240 && px[1] < 20 && px[2] > 240 {
+                        magenta += 1;
+                    }
+                }
+            }
+            check("l'éditeur affiché ne figure pas sur la capture", total > 0 && magenta * 100 < total, format!("{magenta} pixel(s) magenta sur {total} relevés dans la zone de l'éditeur"));
+        }
         check("capture copiée dans le presse-papiers", clip.as_ref().is_some_and(|c| c.width() == m.width && c.height() == m.height), clip.map(|c| format!("{}×{}", c.width(), c.height())).unwrap_or_default());
         let after = app().library.lock().unwrap().list(&crate::library_folder()).len();
         check("la galerie contient les deux captures", after == before + 1 && after == 2, format!("{after} capture(s)"));

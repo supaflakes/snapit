@@ -83,10 +83,35 @@ const SNAPIT_ORIGIN: &str = "http://snapit.localhost";
 // de leurs pages (plusieurs centaines de Mo dans WebView2). La capture suivante les recrée (~100 ms de plus).
 const OVERLAY_IDLE: Duration = Duration::from_secs(120);
 
-/// Protocole snapit:// : images des écrans de la sélection en cours, pour les overlays.
+// Images PNG envoyées à l'éditeur (les plus récentes), servies par le protocole snapit:// plutôt qu'encodées en
+// base64 dans les messages.
+static IMAGES: Mutex<Vec<(u64, Arc<Vec<u8>>)>> = Mutex::new(Vec::new());
+const IMAGES_KEPT: usize = 6;
+
+/// Adresse sous laquelle l'éditeur peut charger cette image PNG.
+pub fn publish_image(png: Vec<u8>) -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let id = SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut images = IMAGES.lock().unwrap();
+    images.push((id, Arc::new(png)));
+    let excess = images.len().saturating_sub(IMAGES_KEPT);
+    images.drain(..excess);
+    format!("{SNAPIT_ORIGIN}/image/{id}.png")
+}
+
+/// Protocole snapit:// : images des écrans de la sélection en cours (overlays) et images de l'éditeur.
 pub fn serve(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     let not_found = || tauri::http::Response::builder().status(404).body(Vec::new()).unwrap();
     let path = request.uri().path();
+    if let Some(id) = path.strip_prefix("/image/").and_then(|p| p.trim_end_matches(".png").parse::<u64>().ok()) {
+        let png = IMAGES.lock().unwrap().iter().find(|(i, _)| *i == id).map(|(_, png)| png.clone());
+        let Some(png) = png else { return not_found() };
+        return tauri::http::Response::builder()
+            .header("Content-Type", "image/png")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(png.as_ref().clone())
+            .unwrap();
+    }
     let Some(index) = path.strip_prefix("/capture/").and_then(|i| i.parse::<usize>().ok()) else { return not_found() };
     let capture = app().capture.session.lock().unwrap().as_ref().and_then(|s| s.captures.get(index).cloned());
     let Some(capture) = capture else { return not_found() };
@@ -99,16 +124,35 @@ pub fn serve(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<V
         .unwrap()
 }
 
-/// Capture de chaque écran, à sa résolution physique.
-async fn grab_displays() -> Result<Vec<Arc<Capture>>, String> {
+fn intersects([ax, ay, aw, ah]: [i32; 4], [bx, by, bw, bh]: [i32; 4]) -> bool {
+    ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah
+}
+
+/// Capture de chaque écran, à sa résolution physique : par duplication du bureau (DXGI), sinon par GDI.
+/// `excluded` : nos fenêtres retirées de la capture à l'instant `since` ; sur leurs écrans, l'image doit être
+/// postérieure à ce retrait.
+async fn grab_displays(excluded: Vec<[i32; 4]>, since: i64) -> Result<Vec<Arc<Capture>>, String> {
     let monitors = app().handle.available_monitors().map_err(|e| e.to_string())?;
     let mut captures = Vec::new();
     for m in monitors {
         let (p, s) = (m.position(), m.size());
         let physical = [p.x, p.y, s.width as i32, s.height as i32];
+        let after = excluded.iter().any(|r| intersects(*r, physical)).then_some(since);
         let (bgra, jpeg) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
-            let bgra = win::grab_screen(physical[0], physical[1], physical[2], physical[3])?;
-            crate::measure::trace("écran capturé (GDI)");
+            // Retirer une fenêtre de la capture ne produit pas de nouvelle image dans la duplication du bureau :
+            // sur un écran où l'une de nos fenêtres est affichée, l'image vient donc de GDI, qui en tient compte.
+            let duplicated = if after.is_none() { crate::dxgi::grab(physical, None) } else { None };
+            let bgra = match duplicated {
+                Some(bgra) => {
+                    crate::measure::trace("écran capturé (DXGI)");
+                    bgra
+                }
+                None => {
+                    let bgra = win::grab_screen(physical[0], physical[1], physical[2], physical[3])?;
+                    crate::measure::trace("écran capturé (GDI)");
+                    bgra
+                }
+            };
             let jpeg = win::encode_jpeg_wic(&bgra, physical[2] as u32, physical[3] as u32, 0.92)
                 .unwrap_or_else(|_| images::encode_jpeg_bgra(&bgra, physical[2] as u16, physical[3] as u16, 92));
             crate::measure::trace("aperçu JPEG encodé");
@@ -167,6 +211,12 @@ pub async fn start_capture(mode: &str, from_menu: bool) {
     let excluded = if app().exclude_supported && mode != "delay" { visible_windows() } else { Vec::new() };
     let mut hidden = if excluded.is_empty() { hide_windows() } else { Vec::new() };
     set_excluded(&excluded, true);
+    let excluded_since = crate::dxgi::now();
+    let excluded_rects: Vec<[i32; 4]> = excluded
+        .iter()
+        .filter_map(|w| Some((w.outer_position().ok()?, w.outer_size().ok()?)))
+        .map(|(p, s)| [p.x, p.y, s.width as i32, s.height as i32])
+        .collect();
 
     let outcome: Result<(), String> = async {
         if mode == "delay" {
@@ -180,7 +230,7 @@ pub async fn start_capture(mode: &str, from_menu: bool) {
         // les fenêtres visibles sont relevées en même temps que l'image, pour la détection de zone
         let detect = mode == "region" && app().settings.get().detect_regions;
         let regions = app().regions.clone();
-        let (captures, found) = futures::join!(grab_displays(), async { if detect { regions.windows().await } else { None } });
+        let (captures, found) = futures::join!(grab_displays(excluded_rects.clone(), excluded_since), async { if detect { regions.windows().await } else { None } });
         crate::measure::trace("écrans capturés, fenêtres relevées");
         set_excluded(&excluded, false);
         let captures = captures?;
@@ -262,7 +312,7 @@ pub async fn deliver(result: CaptureResult) {
         }
     }
     let payload = json!({
-        "dataUrl": images::data_url("image/png", &png),
+        "dataUrl": publish_image(png),
         "scaleFactor": scale,
         "name": name,
         "copied": settings.copy_after_capture,

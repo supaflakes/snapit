@@ -170,6 +170,13 @@ pub fn start() {
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
         let memory_tray = win::memory_of_process_tree();
+        // capture au raccourci sans fenêtre de Snapit à l'écran (le cas le plus courant)
+        let mut no_window = Vec::new();
+        for _ in 0..RUNS {
+            if let Some(v) = overlay_latency().await {
+                no_window.push(v);
+            }
+        }
         capture::destroy_overlays();
         tokio::time::sleep(Duration::from_secs(5)).await;
         let memory_tray_no_overlays = win::memory_of_process_tree();
@@ -180,6 +187,8 @@ pub fn start() {
             "overlayColdMs": cold,
             "overlayWarmMs": warm,
             "overlayWarmMedianMs": median(&warm),
+            "overlayNoWindowMs": no_window,
+            "overlayNoWindowMedianMs": median(&no_window),
             "fullscreenMs": full,
             "fullscreenMedianMs": median(&full),
             "memoryEditorOpenMb": memory_editor / 1024 / 1024,
