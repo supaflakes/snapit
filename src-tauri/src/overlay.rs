@@ -44,6 +44,7 @@ const SKIPPED_TYPES: [&str; 7] = ["Text", "Hyperlink", "ScrollBar", "Thumb", "Se
 
 const WM_COMMANDS: u32 = WM_APP + 1; // message du fil : des commandes attendent
 const PROBE_TIMER: usize = 1;
+const RECOMPOSE_TIMER: usize = 2;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 // Touche virtuelle non attribuée, envoyée pour que Windows autorise l'overlay à prendre le clavier.
 const VK_NEUTRAL: u16 = 0xE8;
@@ -79,6 +80,7 @@ enum Command {
     ScrollButton(usize, oneshot::Sender<Option<[f64; 4]>>),
     Release,
     Destroy,
+    Recompose([i32; 4]),
 }
 
 struct Channel {
@@ -153,6 +155,13 @@ pub fn progress(index: usize, value: f64) {
 /// Libère les surfaces de dessin (longue période sans capture) ; elles sont recréées à la sélection suivante.
 pub fn release() {
     send(Command::Release);
+}
+
+/// Oblige Windows à recomposer l'écran [x, y, l, h] (pixels physiques), sans rien y changer de visible : une fenêtre
+/// d'un pixel, quasi transparente et retirée des captures, y apparaît un instant. Retirer nos fenêtres de la capture
+/// ne change pas l'écran ; sans recomposition, la duplication du bureau ne fournirait pas d'image sans elles.
+pub fn recompose(rect: [i32; 4]) {
+    send(Command::Recompose(rect));
 }
 
 /// Détruit les fenêtres (changement d'écrans) ; elles sont recréées à la sélection suivante.
@@ -515,6 +524,50 @@ struct Thread {
 
 thread_local! {
     static STATE: RefCell<Option<Thread>> = const { RefCell::new(None) };
+    static RECOMPOSE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) }; // fenêtre d'un pixel
+}
+
+// Fenêtre d'un pixel de `recompose` : elle disparaît d'elle-même peu après.
+unsafe extern "system" fn recompose_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_TIMER && wparam.0 == RECOMPOSE_TIMER {
+        let _ = KillTimer(Some(hwnd), RECOMPOSE_TIMER);
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        return LRESULT(0);
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+fn create_recompose_window(instance: HINSTANCE) {
+    unsafe {
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(recompose_proc),
+            hInstance: instance,
+            hbrBackground: windows::Win32::Graphics::Gdi::HBRUSH(windows::Win32::Graphics::Gdi::GetStockObject(windows::Win32::Graphics::Gdi::BLACK_BRUSH).0),
+            lpszClassName: w!("SnapitRecompose"),
+            ..Default::default()
+        };
+        RegisterClassExW(&class);
+        let hwnd = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+            w!("SnapitRecompose"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            None,
+            None,
+            Some(instance),
+            None,
+        );
+        if let Ok(hwnd) = hwnd {
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA);
+            let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+            RECOMPOSE.with(|r| r.set(hwnd.0 as isize));
+        }
+    }
 }
 
 fn run(rx: Receiver<Command>, ready: std::sync::mpsc::Sender<u32>) {
@@ -531,6 +584,7 @@ fn run(rx: Receiver<Command>, ready: std::sync::mpsc::Sender<u32>) {
             ..Default::default()
         };
         RegisterClassExW(&class);
+        create_recompose_window(instance);
         match Resources::new() {
             Ok(res) => STATE.with(|s| *s.borrow_mut() = Some(Thread { res, overlays: HashMap::new() })),
             Err(e) => eprintln!("overlay : Direct2D indisponible ({e})"),
@@ -711,6 +765,15 @@ impl Thread {
                     o.target = None;
                 }
                 self.renew_factory();
+            }
+            Command::Recompose([x, y, _, _]) => {
+                let hwnd = HWND(RECOMPOSE.with(|r| r.get()) as _);
+                if !hwnd.is_invalid() {
+                    unsafe {
+                        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, 1, 1, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                        SetTimer(Some(hwnd), RECOMPOSE_TIMER, 200, None);
+                    }
+                }
             }
             Command::Destroy => {
                 for (_, o) in self.overlays.drain() {

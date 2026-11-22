@@ -347,6 +347,37 @@ Non fait :
 - **Vérifications manuelles** encore à faire : menu de la zone de notification, boîtes Enregistrer et Ouvrir,
   glisser-déposer d'une image, lancement au démarrage, multi-écran.
 
+### Après la migration — capture rapide même éditeur ouvert (22/11/2026)
+
+Quand une fenêtre de Snapit est à l'écran, elle est retirée de la capture (WDA_EXCLUDEFROMCAPTURE). Mais ce
+retrait ne change rien à ce que l'écran affiche : Windows ne recompose pas l'image, et la duplication du bureau ne
+fournit pas de nouvelle image sans nos fenêtres. Depuis la phase 2, la capture repassait donc par GDI (≈ 70 ms).
+
+- **Solution :** une fenêtre d'un pixel, quasi transparente (opacité 1/255) et elle-même retirée des captures,
+  apparaît 200 ms dans le coin de l'écran (`overlay::recompose`). Son apparition oblige Windows à recomposer
+  l'écran ; la duplication reçoit alors une image sans nos fenêtres, en une vingtaine de millisecondes.
+- **Essais écartés :**
+  - redessiner nos fenêtres (`RedrawWindow`) : nouvelle image seulement quand l'écran bougeait par ailleurs, une
+    vidéo par exemple (GDI dans 5 à 6 captures sur 16) ;
+  - attendre sans rien provoquer : 150 ms perdus, puis GDI, soit environ 240 ms.
+- **Repli :** l'attente d'une image postérieure au retrait est limitée à 60 ms, au lieu de 150. Si elle n'arrive pas,
+  GDI prend le relais.
+- **Autotest :** nouvelle vérification que la capture plein écran, éditeur affiché, passe par DXGI. L'éditeur est
+  rempli d'une couleur témoin, et aucun de ses pixels ne doit figurer sur l'image : 0 sur 9 416 relevés.
+  59 vérifications.
+- **Mesures plus justes :**
+  - l'autotest et les mesures ne se lançaient pas quand le Snapit installé tournait (une seule instance) : ils en sont
+    maintenant dispensés ;
+  - ils ont désormais leur propre dossier WebView2 : partagé, le moteur de pages était celui du Snapit installé, et
+    sa mémoire n'était pas comptée ;
+  - les étapes de chaque capture sont écrites dans `%TEMP%\snapit-measure-tauri\etapes.txt`.
+
+| | Avant | Après |
+| --- | --- | --- |
+| Raccourci → sélection, éditeur affiché | 90 ms (capture GDI) | **39 ms** (16 captures sur 16 par DXGI) |
+| Capture plein écran → éditeur | 156 ms | **110 à 120 ms** |
+| Raccourci → sélection, aucune fenêtre de Snapit | 31 ms | 31 à 39 ms (inchangé) |
+
 ## 5. Tests
 
 - **Interface** : le mode démo dans un navigateur (`src/editor/index.html?demo`) reste utilisable tel quel.

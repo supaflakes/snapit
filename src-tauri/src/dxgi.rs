@@ -138,7 +138,9 @@ fn grab_on(outputs: &mut [Output], [x, y, w, h]: [i32; 4], after: Option<i64>) -
             out.duplication = out.output.DuplicateOutput(&out.device).ok();
         }
         let duplication = out.duplication.clone()?;
-        let deadline = Instant::now() + Duration::from_millis(150);
+        // Une image postérieure au retrait de nos fenêtres arrive en une vingtaine de millisecondes : au-delà, GDI
+        // prend le relais sans faire attendre davantage.
+        let deadline = Instant::now() + Duration::from_millis(if after.is_some() { 60 } else { 150 });
         loop {
             let fresh_enough = out.has_frame && after.is_none_or(|t| out.last_present >= t);
             let remaining = deadline.saturating_duration_since(Instant::now());

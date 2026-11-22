@@ -292,6 +292,9 @@ pub fn start() {
         let started = Instant::now();
         capture::start_capture("fullscreen", false).await;
         let elapsed = started.elapsed();
+        let method = *capture::LAST_METHOD.lock().unwrap();
+        // l'éditeur affiché est retiré de l'image et l'écran est quand même copié par la carte graphique
+        check("capture par DXGI malgré l'éditeur affiché", method == "DXGI", method);
         if let Some(w) = &editor {
             let _ = w.eval("document.getElementById('selftest-veil')?.remove()");
         }

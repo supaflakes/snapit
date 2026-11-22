@@ -359,8 +359,13 @@ fn main() {
         return testpage::run(context);
     }
     measure::mark_start();
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|_, _, _| editors::show()))
+    let mut builder = tauri::Builder::default();
+    // Une seule instance, sauf pour l'autotest et les mesures : ils ont leur propre profil et doivent pouvoir tourner
+    // à côté du Snapit installé.
+    if !selftest::enabled() && !measure::enabled() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|_, _, _| editors::show()));
+    }
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

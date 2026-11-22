@@ -38,7 +38,13 @@ pub fn trace(step: &str) {
         *start = Some(Instant::now());
     }
     if let Some(t) = *start {
-        eprintln!("  {:>6.1} ms  {step}", t.elapsed().as_secs_f64() * 1000.0);
+        let line = format!("  {:>6.1} ms  {step}", t.elapsed().as_secs_f64() * 1000.0);
+        eprintln!("{line}");
+        // aussi dans etapes.txt : la sortie d'erreur n'est pas toujours visible (application fenêtrée)
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(out_dir().join("etapes.txt")) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
     }
 }
 
@@ -134,6 +140,7 @@ pub fn start() {
     if !enabled() {
         return;
     }
+    let _ = std::fs::remove_file(out_dir().join("etapes.txt"));
     tauri::async_runtime::spawn(async {
         let marks = MARKS.get().unwrap();
         until(Duration::from_secs(15), || marks.lock().unwrap().editor_shown.is_some()).await;

@@ -53,8 +53,8 @@ des positions et des types d'éléments, jamais de texte. L'option « Détecter 
 des paramètres la désactive : un clic capture alors l'écran entier, comme avant.
 
 L'écran est copié directement depuis la carte graphique (duplication du bureau DXGI) en une quinzaine de
-millisecondes, et la sélection s'affiche environ 30 ms après le raccourci. Les fenêtres de Snapit restent affichées
-mais sont retirées de l'image (Windows 10 2004 et suivants).
+millisecondes, et la sélection s'affiche 30 à 40 ms après le raccourci, éditeur ouvert ou non. Les fenêtres de
+Snapit restent affichées mais sont retirées de l'image (Windows 10 2004 et suivants).
 
 ### Capturer toute la page (capture défilante)
 

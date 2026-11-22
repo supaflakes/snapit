@@ -67,7 +67,13 @@ fn geometry(max_w: f64, max_h: f64, ratio: f64) -> (LogicalPosition<f64>, Logica
 
 fn builder<'a>(label: &'a str, url: &str, title: &str, size: (f64, f64), min: (f64, f64)) -> WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
     let (position, inner) = geometry(size.0, size.1, 0.85);
-    WebviewWindowBuilder::new(&app().handle, label, WebviewUrl::App(url.into()))
+    let mut builder = WebviewWindowBuilder::new(&app().handle, label, WebviewUrl::App(url.into()));
+    // Autotest et mesures : WebView2 a son propre dossier, dans leur profil, pour ne rien partager avec le Snapit
+    // installé qui tournerait en même temps (même moteur de pages, mémoire comptée chez lui).
+    if crate::selftest::enabled() || crate::measure::enabled() {
+        builder = builder.data_directory(app().data_dir.join("webview"));
+    }
+    builder
         .title(title)
         .inner_size(inner.width, inner.height)
         .position(position.x, position.y)

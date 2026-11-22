@@ -67,6 +67,9 @@ pub struct CaptureState {
     sessions: AtomicU64, // numéro de la dernière sélection
 }
 
+/// Méthode de la dernière capture d'écran (« DXGI » ou « GDI »), relevée par l'autotest.
+pub static LAST_METHOD: Mutex<&str> = Mutex::new("");
+
 const SNAPIT_ORIGIN: &str = "http://snapit.localhost";
 // Après ce délai sans capture, les overlays libèrent leurs surfaces de dessin ; la capture suivante les recrée.
 const OVERLAY_IDLE: Duration = Duration::from_secs(120);
@@ -118,17 +121,22 @@ async fn grab_displays(excluded: Vec<[i32; 4]>, since: i64) -> Result<Vec<Arc<Ca
         let physical = [p.x, p.y, s.width as i32, s.height as i32];
         let after = excluded.iter().any(|r| intersects(*r, physical)).then_some(since);
         let bgra = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
-            // Retirer une fenêtre de la capture ne produit pas de nouvelle image dans la duplication du bureau :
-            // sur un écran où l'une de nos fenêtres est affichée, l'image vient donc de GDI, qui en tient compte.
-            let duplicated = if after.is_none() { crate::dxgi::grab(physical, None) } else { None };
+            // sur un écran où l'une de nos fenêtres est affichée, l'image doit être postérieure à son retrait ;
+            // à défaut, GDI prend le relais
+            if after.is_some() {
+                overlay::recompose(physical); // nouvelle image de l'écran, sans nos fenêtres
+            }
+            let duplicated = crate::dxgi::grab(physical, after);
             let bgra = match duplicated {
                 Some(bgra) => {
                     crate::measure::trace("écran capturé (DXGI)");
+                    *LAST_METHOD.lock().unwrap() = "DXGI";
                     bgra
                 }
                 None => {
                     let bgra = win::grab_screen(physical[0], physical[1], physical[2], physical[3])?;
                     crate::measure::trace("écran capturé (GDI)");
+                    *LAST_METHOD.lock().unwrap() = "GDI";
                     bgra
                 }
             };
