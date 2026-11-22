@@ -36,7 +36,18 @@
     // Éditeur
     capture: (mode) => invoke('capture', { mode }),
     getInitialImage: () => invoke('editor_initial'),
-    onLoadImage: (callback) => on('editor:load', callback),
+    // Image à afficher : description seule (image servie par Snapit), ou pixels d'une capture neuve dans une
+    // mémoire partagée de WebView2, plus rapides (ni PNG à décoder) ; `pixels.release()` libère cette mémoire.
+    onLoadImage: (callback) => {
+      on('editor:load', callback);
+      window.chrome?.webview?.addEventListener('sharedbufferreceived', (e) => {
+        const payload = e.additionalData;
+        if (!payload?.pixels) return;
+        const buffer = e.getBuffer();
+        const release = () => window.chrome.webview.releaseBuffer(buffer);
+        callback({ ...payload, pixels: { ...payload.pixels, buffer, release } });
+      });
+    },
     setDocument: (doc) => send('editor_state', { hasImage: Boolean(doc?.hasImage), libraryId: doc?.libraryId ?? null }),
     showImage: (payload) => invoke('editor_show', { payload }),
     copyImage: (dataUrl) => invoke('clipboard_write_image', { dataUrl }),

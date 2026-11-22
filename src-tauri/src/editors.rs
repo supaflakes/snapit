@@ -1,6 +1,8 @@
 // Fenêtres de l'éditeur et des paramètres.
-use serde_json::Value;
+use image::RgbaImage;
+use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
@@ -255,36 +257,87 @@ pub fn show() {
 /// capture est enregistrée automatiquement (on la retrouve dans la galerie). Sinon, nouvelle fenêtre.
 pub fn open_image(payload: Value, preferred: Option<&str>) {
     let library_id = payload.get("libraryId").and_then(Value::as_str).map(String::from);
-    let show_gallery = app().settings.get().show_gallery;
-    let target = {
-        let list = app().editors.list.lock().unwrap();
-        if let Some((label, _)) = library_id.as_ref().and_then(|id| list.iter().find(|(_, e)| e.library_id.as_ref() == Some(id))) {
-            let label = label.clone();
-            drop(list);
+    match target(library_id.as_deref(), preferred) {
+        Target::Shown(label) => {
             if let Some(w) = app().handle.get_webview_window(&label) {
                 focus(&w);
             }
-            return;
         }
-        let reusable = |e: &Editor| !e.has_image || (e.library_id.is_some() && show_gallery);
-        let mut by_focus: Vec<(&String, &Editor)> = list.iter().collect();
-        by_focus.sort_by(|a, b| b.1.focused_at.cmp(&a.1.focused_at));
-        let preferred = preferred.and_then(|p| list.get_key_value(p));
-        let empty = list.iter().filter(|(_, e)| !e.has_image);
-        preferred.into_iter().chain(empty).chain(by_focus).find(|(_, e)| reusable(e)).map(|(l, _)| l.clone())
-    };
-    let Some(label) = target else {
-        create(Some(payload));
-        return;
-    };
-    if let Some(e) = app().editors.list.lock().unwrap().get_mut(&label) {
-        e.has_image = true;
-        e.library_id = library_id;
+        Target::New => {
+            create(Some(payload));
+        }
+        Target::Reuse(label) => {
+            set_state(&label, true, library_id);
+            if let Some(w) = app().handle.get_webview_window(&label) {
+                let _ = w.emit_to(&label, "editor:load", payload); // l'éditeur enregistre d'abord la capture qu'il affiche
+                focus(&w);
+            }
+        }
     }
-    if let Some(w) = app().handle.get_webview_window(&label) {
-        let _ = w.emit_to(&label, "editor:load", payload); // l'éditeur enregistre d'abord la capture qu'il affiche
-        focus(&w);
+}
+
+enum Target {
+    Shown(String), // fenêtre qui affiche déjà cette capture
+    Reuse(String),
+    New,
+}
+
+fn target(library_id: Option<&str>, preferred: Option<&str>) -> Target {
+    let show_gallery = app().settings.get().show_gallery;
+    let list = app().editors.list.lock().unwrap();
+    if let Some((label, _)) = library_id.and_then(|id| list.iter().find(|(_, e)| e.library_id.as_deref() == Some(id))) {
+        return Target::Shown(label.clone());
     }
+    let reusable = |e: &Editor| !e.has_image || (e.library_id.is_some() && show_gallery);
+    let mut by_focus: Vec<(&String, &Editor)> = list.iter().collect();
+    by_focus.sort_by(|a, b| b.1.focused_at.cmp(&a.1.focused_at));
+    let preferred = preferred.and_then(|p| list.get_key_value(p));
+    let empty = list.iter().filter(|(_, e)| !e.has_image);
+    let found = preferred.into_iter().chain(empty).chain(by_focus).find(|(_, e)| reusable(e));
+    found.map_or(Target::New, |(l, _)| Target::Reuse(l.clone()))
+}
+
+/// Ouvre une capture neuve dans un éditeur déjà chargé, en lui remettant directement ses pixels par une mémoire
+/// partagée de WebView2 : ni PNG à encoder avant l'affichage, ni PNG à décoder dans la page (environ 35 ms chacun
+/// pour un écran 2560×1600). Renvoie faux si aucun éditeur ne peut la recevoir ainsi : l'appelant l'ouvre alors
+/// avec `open_image`, une fois le PNG prêt.
+pub async fn open_pixels(mut payload: Value, image: Arc<RgbaImage>) -> bool {
+    let library_id = payload.get("libraryId").and_then(Value::as_str).map(String::from);
+    let Target::Reuse(label) = target(library_id.as_deref(), None) else { return false };
+    if !app().editors.list.lock().unwrap().get(&label).is_some_and(|e| e.loaded) {
+        return false; // page pas encore prête à recevoir
+    }
+    let Some(window) = app().handle.get_webview_window(&label) else { return false };
+    payload["pixels"] = json!({ "width": image.width(), "height": image.height() });
+    let data = payload.to_string();
+    let (tx, rx) = oneshot::channel();
+    let posting = window.with_webview(move |webview| {
+        let _ = tx.send(unsafe { post_pixels(&webview, &image, &data) }.is_ok());
+    });
+    if posting.is_err() || !rx.await.unwrap_or(false) {
+        return false;
+    }
+    set_state(&label, true, library_id);
+    focus(&window);
+    true
+}
+
+// Copie les pixels (RGBA) dans une mémoire partagée avec la page, qui les reçoit avec la description de la capture.
+unsafe fn post_pixels(webview: &tauri::webview::PlatformWebview, image: &RgbaImage, data: &str) -> windows_core_webview::Result<()> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::*;
+    use windows_core_webview::{Interface, HSTRING};
+    let environment = webview.environment().cast::<ICoreWebView2Environment12>()?;
+    let core = webview.controller().CoreWebView2()?.cast::<ICoreWebView2_17>()?;
+    let bytes = image.as_raw();
+    let buffer = environment.CreateSharedBuffer(bytes.len() as u64)?;
+    let mut ptr = std::ptr::null_mut();
+    buffer.Buffer(&mut ptr)?;
+    if ptr.is_null() {
+        return Err(windows_core_webview::Error::empty());
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+    // la page libère la mémoire (releaseBuffer) une fois l'image copiée dans sa toile
+    core.PostSharedBufferToScript(&buffer, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_ONLY, &HSTRING::from(data))
 }
 
 pub fn open_settings() {

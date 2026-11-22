@@ -26,16 +26,27 @@ impl Capture {
         self.physical[3]
     }
 
-    /// Partie [x, y, l, h] de l'image (pixels de l'image), en RGBA.
+    /// Partie [x, y, l, h] de l'image (pixels de l'image), en RGBA. Par mots de 32 bits et sur plusieurs cœurs :
+    /// environ 3 ms pour un écran 2560×1600, au lieu de 15.
     pub fn crop(&self, [x, y, w, h]: [i32; 4]) -> RgbaImage {
         let stride = self.width() as usize * 4;
+        let line_len = w as usize * 4;
         let mut out = RgbaImage::new(w as u32, h as u32);
-        for (row, line) in out.chunks_exact_mut(w as usize * 4).enumerate() {
-            let start = (y as usize + row) * stride + x as usize * 4;
-            for (dst, src) in line.chunks_exact_mut(4).zip(self.bgra[start..start + w as usize * 4].chunks_exact(4)) {
-                dst.copy_from_slice(&[src[2], src[1], src[0], 255]);
-            }
+        if line_len == 0 {
+            return out;
         }
+        let rows_per_part = (h as usize).div_ceil(PARTS).max(1);
+        std::thread::scope(|s| {
+            for (part, block) in out.chunks_mut(rows_per_part * line_len).enumerate() {
+                let bgra = &self.bgra;
+                s.spawn(move || {
+                    for (i, line) in block.chunks_exact_mut(line_len).enumerate() {
+                        let start = (y as usize + part * rows_per_part + i) * stride + x as usize * 4;
+                        bgra_to_rgba(&bgra[start..start + line_len], line);
+                    }
+                });
+            }
+        });
         out
     }
 
@@ -43,6 +54,17 @@ impl Capture {
         self.crop([0, 0, self.width(), self.height()])
     }
 
+}
+
+const PARTS: usize = 4;
+
+// BGRA (écran) -> RGBA opaque, un pixel par mot de 32 bits.
+fn bgra_to_rgba(src: &[u8], dst: &mut [u8]) {
+    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        let v = u32::from_le_bytes([s[0], s[1], s[2], s[3]]); // 0xAARRGGBB
+        let rgba = ((v >> 16) & 0xff) | (v & 0xff00) | ((v & 0xff) << 16) | 0xff00_0000;
+        d.copy_from_slice(&rgba.to_le_bytes());
+    }
 }
 
 /// Résultat d'une capture : l'image, éventuellement déjà encodée en PNG (capture défilante).
@@ -69,6 +91,8 @@ pub struct CaptureState {
 
 /// Méthode de la dernière capture d'écran (« DXGI » ou « GDI »), relevée par l'autotest.
 pub static LAST_METHOD: Mutex<&str> = Mutex::new("");
+/// Comment la dernière capture est parvenue à l'éditeur : « pixels » (mémoire partagée) ou « PNG ».
+pub static LAST_DELIVERY: Mutex<&str> = Mutex::new("");
 
 const SNAPIT_ORIGIN: &str = "http://snapit.localhost";
 // Après ce délai sans capture, les overlays libèrent leurs surfaces de dessin ; la capture suivante les recrée.
@@ -274,13 +298,39 @@ fn contains([x, y, w, h]: [i32; 4], px: f64, py: f64) -> bool {
 }
 
 /// Ouvre la capture dans l'éditeur, puis la copie dans le presse-papiers et l'enregistre dans la bibliothèque
-/// (selon les paramètres). Seul l'encodage du PNG retarde l'affichage : la miniature est calculée en même temps,
-/// le presse-papiers et les fichiers de la bibliothèque viennent après. (Une image non compressée, prête plus tôt,
-/// mettrait bien plus longtemps à parvenir à l'éditeur : 16 Mo pour un écran 2560×1600.)
+/// (selon les paramètres). Un éditeur déjà ouvert reçoit directement les pixels ; le PNG et la miniature sont
+/// encodés pendant qu'il les affiche. Sinon (pas d'éditeur prêt), l'éditeur reçoit le PNG dès qu'il est encodé.
+/// (Une image non compressée servie comme un fichier, BMP, mettrait bien plus longtemps à parvenir à la page :
+/// 16 Mo pour un écran 2560×1600.)
 pub async fn deliver(result: CaptureResult) {
     let settings = app().settings.get();
     let CaptureResult { image, png, scale, mut notice } = result;
     let image = Arc::new(image);
+    let name = capture_name();
+    let reserved = if settings.auto_save {
+        let folder = crate::library_folder();
+        let reserved = app().library.lock().unwrap().reserve(&folder, &name, scale, image.width(), image.height());
+        if reserved.is_err() {
+            notice = Some(t("toast.autosaveFailed", &[])); // la capture s'ouvre quand même, sans enregistrement
+        }
+        reserved.ok()
+    } else {
+        None
+    };
+    let mut payload = json!({
+        "scaleFactor": scale,
+        "name": name,
+        "copied": settings.copy_after_capture,
+        "notice": notice,
+        "libraryId": reserved,
+    });
+    let shown = crate::editors::open_pixels(payload.clone(), image.clone()).await;
+    *LAST_DELIVERY.lock().unwrap() = if shown { "pixels" } else { "PNG" };
+    if shown {
+        crate::measure::trace("pixels remis à l'éditeur");
+    }
+
+    // la miniature en même temps que le PNG
     let encoding = image.clone();
     let encoded = tauri::async_runtime::spawn_blocking(move || {
         let image = &encoding;
@@ -293,30 +343,12 @@ pub async fn deliver(result: CaptureResult) {
     .await;
     let Ok((png, thumb)) = encoded else { return };
     crate::measure::trace("PNG et miniature encodés");
-    let name = capture_name();
-    let (width, height) = (image.width(), image.height());
-    let reserved = if settings.auto_save {
-        let folder = crate::library_folder();
-        let reserved = app().library.lock().unwrap().reserve(&folder, &name, scale, width, height);
-        if reserved.is_err() {
-            notice = Some(t("toast.autosaveFailed", &[])); // la capture s'ouvre quand même, sans enregistrement
-        }
-        reserved.ok()
-    } else {
-        None
-    };
-    let payload = json!({
-        "dataUrl": publish_shared(png.clone()),
-        "scaleFactor": scale,
-        "name": name,
-        "copied": settings.copy_after_capture,
-        "notice": notice,
-        "libraryId": reserved,
-    });
-    crate::measure::trace("envoi à l'éditeur");
-    crate::editors::open_image(payload, None);
+    if !shown {
+        payload["dataUrl"] = json!(publish_shared(png.clone()));
+        crate::editors::open_image(payload, None);
+        crate::measure::trace("envoi à l'éditeur");
+    }
 
-    // pendant que l'éditeur affiche l'image
     let clipboard = settings.copy_after_capture.then(|| {
         let png = png.clone();
         tauri::async_runtime::spawn_blocking(move || images::write_clipboard(&image, &png))

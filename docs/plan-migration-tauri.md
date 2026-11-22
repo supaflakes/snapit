@@ -410,13 +410,28 @@ bibliothèque.
 - **Essai écarté :** envoyer d'abord une image non compressée (BMP, prête en 20 ms). Pour un écran 2560×1600, elle
   pèse 16 Mo, et WebView2 met environ 275 ms à la recevoir et la décoder, contre environ 45 ms pour le PNG de
   860 Ko. La capture plein écran passait de 110 à 330 ms.
-- Le temps restant, environ 45 ms entre l'envoi et l'image affichée, se passe dans la page de l'éditeur : décodage
-  et dessin. C'est là que se trouverait le prochain gain.
+- Le temps restant, environ 45 ms entre l'envoi et l'image affichée, se passait dans la page de l'éditeur. Les
+  repères posés dans la page ont donné : réception en 3 à 6 ms, **décodage du PNG en 30 à 45 ms**, dessin en 1 ms.
+
+**Pixels par mémoire partagée.** Un éditeur déjà ouvert reçoit maintenant les pixels bruts d'une capture neuve par une
+mémoire partagée de WebView2 (`CreateSharedBuffer` puis `PostSharedBufferToScript`, `editors::open_pixels`), avec la
+description de la capture. La page les pose dans sa toile (`putImageData`) directement depuis cette mémoire, puis la
+libère. Le PNG n'est plus encodé avant l'affichage ni décodé dans la page ; il est encodé pendant ce temps, pour la
+bibliothèque et le presse-papiers. Une fenêtre pas encore chargée garde le chemin du PNG.
+
+- Copie dans la mémoire partagée : environ 11 ms pour 16 Mo. Elle se fait sur le fil principal, qui doit tenir
+  l'objet COM. Lecture côté page : directe, sans recopie (la recopie coûtait 15 ms).
+- Conversion BGRA → RGBA de l'image capturée : par mots de 32 bits et sur 4 cœurs, 7 ms au lieu de 15. Les
+  captures de zone en profitent aussi.
+- **Autotest :** deux vérifications de plus. Les pixels doivent arriver par la mémoire partagée. L'image annotée
+  exportée par l'éditeur doit être, hors de l'annotation, identique au PNG d'origine encodé par Snapit : 0
+  différence sur 4 522 points (couleurs, sens et alignement des lignes). 61 vérifications.
 
 | | Avant | Après |
 | --- | --- | --- |
 | Éditeur ouvert, en arrière-plan | ≈ 460 Mo | **≈ 395 Mo** |
-| Capture plein écran → éditeur | 107 à 111 ms | 95 à 116 ms (inchangé, à la mesure près) |
+| Capture plein écran → éditeur (PNG) | 107 à 111 ms | 95 à 116 ms (inchangé, à la mesure près) |
+| Capture plein écran → éditeur (pixels partagés) | 107 à 111 ms | **57 à 61 ms** (médiane 61, première capture 81) |
 | Capture plein écran → presse-papiers | ≈ 300 ms | **≈ 110 ms** |
 | Capture plein écran → fichiers de la bibliothèque | 70 à 94 ms, avant l'affichage | ≈ 65 ms, après l'affichage |
 

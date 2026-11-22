@@ -280,16 +280,9 @@ function setDirty(dirty) {
 // -------------------------------------------------------------------- image
 
 // `libraryId` et `shapes` : capture rouverte depuis la bibliothèque, avec ses annotations.
-async function loadImage({ dataUrl, scaleFactor = 1, name, libraryId = null, shapes = [], copied = false, notice = null }) {
-  const img = new Image();
-  // image servie par l'application (version Tauri) : chargée avec CORS pour que l'export reste possible
-  if (/^https?:/.test(dataUrl)) img.crossOrigin = 'anonymous';
-  img.src = dataUrl;
-  await img.decode();
-  const base = document.createElement('canvas');
-  base.width = img.naturalWidth;
-  base.height = img.naturalHeight;
-  base.getContext('2d').drawImage(img, 0, 0);
+// `pixels` : capture neuve remise par Snapit (RGBA dans une mémoire partagée), sans image à décoder.
+async function loadImage({ dataUrl, pixels = null, scaleFactor = 1, name, libraryId = null, shapes = [], copied = false, notice = null }) {
+  const base = pixels ? canvasFromPixels(pixels) : await canvasFromUrl(dataUrl);
 
   cancelTextEdit();
   interaction = null;
@@ -318,6 +311,32 @@ async function loadImage({ dataUrl, scaleFactor = 1, name, libraryId = null, sha
   stage.focus();
   if (notice) toast(notice);
   else if (copied) toast(t('toast.captureCopied'));
+}
+
+async function canvasFromUrl(dataUrl) {
+  const img = new Image();
+  // image servie par l'application (version Tauri) : chargée avec CORS pour que l'export reste possible
+  if (/^https?:/.test(dataUrl)) img.crossOrigin = 'anonymous';
+  img.src = dataUrl;
+  await img.decode();
+  const base = document.createElement('canvas');
+  base.width = img.naturalWidth;
+  base.height = img.naturalHeight;
+  base.getContext('2d').drawImage(img, 0, 0);
+  return base;
+}
+
+function canvasFromPixels({ buffer, width, height, release }) {
+  try {
+    const base = document.createElement('canvas');
+    base.width = width;
+    base.height = height;
+    // putImageData copie les pixels : la mémoire partagée peut ensuite être libérée
+    base.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buffer), width, height), 0, 0);
+    return base;
+  } finally {
+    release();
+  }
 }
 
 // Annotations enregistrées : types connus, réglages complétés, identifiants propres à cette session.

@@ -250,6 +250,32 @@ pub fn start() {
             let _ = window.eval(ADD_RECT);
             let saved = until(Duration::from_secs(5), || latest_data().is_some_and(|d| d["shapes"].as_array().is_some_and(|s| s.len() == 1))).await;
             check("annotation enregistrée automatiquement", saved, "");
+            let delivery = *capture::LAST_DELIVERY.lock().unwrap();
+            check("pixels remis directement à l'éditeur (mémoire partagée)", delivery == "pixels", delivery);
+            // L'image annotée exportée par l'éditeur, hors de l'annotation, doit être l'image d'origine (PNG encodé
+            // par Snapit), pixel pour pixel : couleurs, sens et alignement des lignes.
+            if let Some(d) = latest_data() {
+                let original = image::open(library_dir().join(".snapit").join(format!("{}.png", d["id"].as_str().unwrap_or_default())));
+                let exported = image::open(library_dir().join(d["file"].as_str().unwrap_or_default()));
+                let (mut differ, mut total) = (0u32, 0u32);
+                if let (Ok(a), Ok(b)) = (&original, &exported) {
+                    let (a, b) = (a.to_rgba8(), b.to_rgba8());
+                    if a.dimensions() == b.dimensions() {
+                        for y in (0..a.height()).step_by(7) {
+                            for x in (0..a.width()).step_by(11) {
+                                if x < 150 && y < 150 {
+                                    continue; // annotation
+                                }
+                                total += 1;
+                                if a.get_pixel(x, y) != b.get_pixel(x, y) {
+                                    differ += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                check("l'éditeur affiche l'image capturée, pixel pour pixel", total > 0 && differ == 0, format!("{differ} différence(s) sur {total} points"));
+            }
             let _ = window.eval(ADD_RECT);
             tokio::time::sleep(Duration::from_millis(50)).await;
             let closed = editors::close(&label).await;
