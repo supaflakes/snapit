@@ -40,16 +40,92 @@ pub fn from_data_url(text: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(text).ok()
 }
 
-pub fn write_clipboard(image: &RgbaImage) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard
-        .set_image(arboard::ImageData { width: image.width() as usize, height: image.height() as usize, bytes: image.as_raw().into() })
-        .map_err(|e| e.to_string())
+/// Met l'image dans le presse-papiers, en PNG (déjà encodé : arboard réencoderait l'image, lentement, en
+/// occupant le processeur pendant que l'éditeur affiche la capture) et en bitmap (CF_DIBV5) pour les autres
+/// applications.
+pub fn write_clipboard(image: &RgbaImage, png: &[u8]) -> Result<(), String> {
+    use windows::core::w;
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+    use windows::Win32::Graphics::Gdi::{BITMAPV5HEADER, BI_BITFIELDS};
+    use windows::Win32::System::DataExchange::*;
+    use windows::Win32::System::Memory::*;
+    use windows::Win32::System::Ole::CF_DIBV5;
+
+    // copie dans un bloc de mémoire global, remis au presse-papiers (qui en devient propriétaire)
+    unsafe fn put(format: u32, size: usize, fill: impl FnOnce(&mut [u8])) -> Result<(), String> {
+        let memory: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, size).map_err(|e| e.to_string())?;
+        let ptr = GlobalLock(memory) as *mut u8;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(memory));
+            return Err("GlobalLock".into());
+        }
+        fill(std::slice::from_raw_parts_mut(ptr, size));
+        let _ = GlobalUnlock(memory);
+        if SetClipboardData(format, Some(HANDLE(memory.0))).is_err() {
+            let _ = GlobalFree(Some(memory));
+            return Err("SetClipboardData".into());
+        }
+        Ok(())
+    }
+
+    let (w, h) = (image.width() as usize, image.height() as usize);
+    let header = BITMAPV5HEADER {
+        bV5Size: std::mem::size_of::<BITMAPV5HEADER>() as u32,
+        bV5Width: w as i32,
+        bV5Height: h as i32, // de bas en haut : Word ne colle pas les images de hauteur négative
+        bV5Planes: 1,
+        bV5BitCount: 32,
+        bV5Compression: BI_BITFIELDS,
+        bV5SizeImage: (w * h * 4) as u32,
+        bV5RedMask: 0x00ff0000,
+        bV5GreenMask: 0x0000ff00,
+        bV5BlueMask: 0x000000ff,
+        bV5AlphaMask: 0xff000000,
+        bV5CSType: 0x7352_4742, // LCS_sRGB
+        bV5Intent: 4,           // LCS_GM_IMAGES
+        ..Default::default()
+    };
+    let header_bytes = unsafe { std::slice::from_raw_parts(&header as *const _ as *const u8, std::mem::size_of::<BITMAPV5HEADER>()) };
+    unsafe {
+        // un autre programme peut tenir le presse-papiers un instant
+        let mut opened = false;
+        for _ in 0..20 {
+            if OpenClipboard(None).is_ok() {
+                opened = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if !opened {
+            return Err("presse-papiers occupé".into());
+        }
+        let result = (|| {
+            EmptyClipboard().map_err(|e| e.to_string())?;
+            // PNG d'abord : beaucoup d'applications prennent le premier format proposé
+            put(RegisterClipboardFormatW(w!("PNG")), png.len(), |out| out.copy_from_slice(png))?;
+            let stride = w * 4;
+            put(CF_DIBV5.0 as u32, header_bytes.len() + stride * h, |out| {
+                out[..header_bytes.len()].copy_from_slice(header_bytes);
+                let dst = &mut out[header_bytes.len()..];
+                for (y, row) in image.as_raw().chunks_exact(stride).enumerate() {
+                    let line = &mut dst[(h - 1 - y) * stride..(h - y) * stride];
+                    for (d, s) in line.chunks_exact_mut(4).zip(row.chunks_exact(4)) {
+                        d[0] = s[2];
+                        d[1] = s[1];
+                        d[2] = s[0];
+                        d[3] = s[3];
+                    }
+                }
+            })
+        })();
+        let _ = CloseClipboard();
+        result
+    }
 }
 
 pub fn write_clipboard_png(png: &[u8]) -> Result<(), String> {
     let image = image::load_from_memory(png).map_err(|e| e.to_string())?.to_rgba8();
-    write_clipboard(&image)
+    write_clipboard(&image, png)
 }
 
 pub fn read_clipboard() -> Option<RgbaImage> {

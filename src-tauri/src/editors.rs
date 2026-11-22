@@ -10,6 +10,8 @@ use crate::{app, t, BRIDGE};
 
 // Délai laissé à l'éditeur pour enregistrer avant de fermer (une capture défilante très haute est longue à encoder).
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+// Délai avant d'alléger un éditeur passé en arrière-plan.
+const LOW_MEMORY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct Editor {
@@ -65,6 +67,19 @@ fn geometry(max_w: f64, max_h: f64, ratio: f64) -> (LogicalPosition<f64>, Logica
     (LogicalPosition::new((ax + (aw - w) / 2.0).round(), (ay + (ah - h) / 2.0).round()), LogicalSize::new(w, h))
 }
 
+/// Demande à WebView2 de réduire sa mémoire (fenêtre en arrière-plan) ou de revenir à la normale. Le moteur rend
+/// alors ce qu'il peut (caches, mémoire du rendu) et le reprend quand la fenêtre revient au premier plan.
+pub fn set_low_memory(window: &WebviewWindow, low: bool) {
+    let _ = window.with_webview(move |webview| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::*;
+        use windows_core_webview::Interface;
+        let Ok(core) = webview.controller().CoreWebView2() else { return };
+        let Ok(core) = core.cast::<ICoreWebView2_19>() else { return };
+        let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+        let _ = core.SetMemoryUsageTargetLevel(level);
+    });
+}
+
 fn builder<'a>(label: &'a str, url: &str, title: &str, size: (f64, f64), min: (f64, f64)) -> WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
     let (position, inner) = geometry(size.0, size.1, 0.85);
     let mut builder = WebviewWindowBuilder::new(&app().handle, label, WebviewUrl::App(url.into()));
@@ -115,6 +130,18 @@ pub fn create(payload: Option<Value>) -> Option<WebviewWindow> {
             if let Some(e) = app().editors.list.lock().unwrap().get_mut(target.label()) {
                 e.focused_at = tick();
             }
+            set_low_memory(&target, false);
+        }
+        WindowEvent::Focused(false) => {
+            // après quelques secondes seulement : un passage par une boîte de dialogue ou par l'overlay de capture
+            // ne doit pas faire perdre ses caches à l'éditeur
+            let window = target.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(LOW_MEMORY_DELAY).await;
+                if !window.is_focused().unwrap_or(true) {
+                    set_low_memory(&window, true);
+                }
+            });
         }
         WindowEvent::CloseRequested { api, .. } => {
             let label = target.label().to_string();

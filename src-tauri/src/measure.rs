@@ -136,6 +136,14 @@ async fn fullscreen_latency() -> Option<f64> {
     done.map(|t| ms(t - start))
 }
 
+// Mémoire de travail et mémoire privée de chaque processus de Snapit (WebView2 compris), en Mo.
+fn processes() -> Vec<serde_json::Value> {
+    win::memory_by_process()
+        .into_iter()
+        .map(|(name, ws, private)| json!({ "name": name, "mb": ws / 1024 / 1024, "privateMb": private / 1024 / 1024 }))
+        .collect()
+}
+
 pub fn start() {
     if !enabled() {
         return;
@@ -154,6 +162,22 @@ pub fn start() {
         until(Duration::from_secs(30), || app().zones.running()).await;
         tokio::time::sleep(Duration::from_secs(3)).await;
         let memory_editor = win::memory_of_process_tree();
+        let private_editor: u64 = win::memory_by_process().iter().map(|(_, _, p)| p).sum();
+        let processes_editor = processes();
+        // éditeur en arrière-plan (l'utilisateur travaille dans une autre application)
+        for label in editors::labels() {
+            if let Some(w) = tauri::Manager::get_webview_window(&app().handle, &label) {
+                editors::set_low_memory(&w, true);
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let memory_background = win::memory_of_process_tree();
+        let private_background: u64 = win::memory_by_process().iter().map(|(_, _, p)| p).sum();
+        for label in editors::labels() {
+            if let Some(w) = tauri::Manager::get_webview_window(&app().handle, &label) {
+                editors::set_low_memory(&w, false);
+            }
+        }
 
         let cold = overlay_latency().await;
         let mut warm = Vec::new();
@@ -188,7 +212,7 @@ pub fn start() {
         tokio::time::sleep(Duration::from_secs(15)).await;
         let memory_tray_no_overlays = win::memory_of_process_tree();
         let private_tray = win::private_memory();
-        let processes: Vec<_> = win::memory_by_process().into_iter().map(|(name, bytes)| json!({ "name": name, "mb": bytes / 1024 / 1024 })).collect();
+        let processes_tray = processes();
 
         let results = json!({
             "startupMs": startup,
@@ -200,10 +224,14 @@ pub fn start() {
             "fullscreenMs": full,
             "fullscreenMedianMs": median(&full),
             "memoryEditorOpenMb": memory_editor / 1024 / 1024,
+            "privateEditorOpenMb": private_editor / 1024 / 1024,
+            "processesEditorOpen": processes_editor,
+            "memoryEditorBackgroundMb": memory_background / 1024 / 1024,
+            "privateEditorBackgroundMb": private_background / 1024 / 1024,
             "memoryTrayOnlyMb": memory_tray / 1024 / 1024,
             "memoryTrayNoOverlaysMb": memory_tray_no_overlays / 1024 / 1024,
             "privateTrayNoOverlaysMb": private_tray / 1024 / 1024,
-            "processesTrayOnly": processes,
+            "processesTrayOnly": processes_tray,
             "version": env!("CARGO_PKG_VERSION"),
             "build": if cfg!(debug_assertions) { "debug" } else { "release" },
         });

@@ -122,11 +122,12 @@ fn decode_b64(value: &Value) -> Option<Vec<u8>> {
 pub struct Library {
     entries: HashMap<String, Entry>, // pour tous les dossiers lus : une capture ouverte reste enregistrable
     scanned: HashSet<PathBuf>,
+    writing: HashSet<String>, // captures réservées dont les fichiers ne sont pas encore écrits
 }
 
 impl Library {
     pub fn new() -> Self {
-        Library { entries: HashMap::new(), scanned: HashSet::new() }
+        Library { entries: HashMap::new(), scanned: HashSet::new(), writing: HashSet::new() }
     }
 
     fn scan(&mut self, folder: &Path) {
@@ -162,7 +163,7 @@ impl Library {
     /// Captures du dossier, de la plus récente à la plus ancienne.
     pub fn list(&mut self, folder: &Path) -> Vec<Value> {
         self.scan(folder);
-        let mut list: Vec<&Entry> = self.entries.values().filter(|e| e.folder == folder).collect();
+        let mut list: Vec<&Entry> = self.entries.values().filter(|e| e.folder == folder && !self.writing.contains(&e.id)).collect();
         list.sort_by(|a, b| b.created.total_cmp(&a.created));
         list.into_iter().map(Self::item).collect()
     }
@@ -193,11 +194,11 @@ impl Library {
         write_atomic(&Self::data_path(entry, ".json"), data.to_string().as_bytes(), &entry.folder.join(DATA_DIR))
     }
 
-    /// Ajoute une nouvelle capture (PNG et miniature JPEG déjà encodés) ; renvoie sa description.
-    pub fn create(&mut self, folder: &Path, png: &[u8], thumb: &[u8], name: &str, unit: f64, width: u32, height: u32) -> std::io::Result<Value> {
+    /// Réserve une nouvelle capture (identifiant et nom de fichier) pour l'ouvrir aussitôt dans l'éditeur ; ses
+    /// fichiers sont écrits ensuite par `write_new`. D'ici là, elle n'apparaît pas dans la galerie.
+    pub fn reserve(&mut self, folder: &Path, name: &str, unit: f64, width: u32, height: u32) -> std::io::Result<String> {
         self.scan(folder);
-        let dir = folder.join(DATA_DIR);
-        ensure_data_dir(&dir)?;
+        ensure_data_dir(&folder.join(DATA_DIR))?;
         let now = now_ms();
         let entry = Entry {
             id: new_id(),
@@ -211,13 +212,39 @@ impl Library {
             unit,
             rev: 0.0,
         };
-        write_atomic(&Self::data_path(&entry, ".png"), png, &dir)?;
-        write_atomic(&folder.join(&entry.file), png, &dir)?;
-        write_atomic(&Self::data_path(&entry, ".jpg"), thumb, &dir)?;
-        Self::write_data(&entry, &json!([]))?;
-        let item = Self::item(&entry);
-        self.entries.insert(entry.id.clone(), entry);
-        Ok(item)
+        let id = entry.id.clone();
+        self.entries.insert(id.clone(), entry);
+        self.writing.insert(id.clone());
+        Ok(id)
+    }
+
+    /// Écrit les fichiers d'une capture réservée et renvoie sa description (None si elle a été supprimée entre-temps).
+    /// Si l'éditeur a déjà enregistré des modifications, seule l'image d'origine peut encore manquer. En cas
+    /// d'échec, la capture est retirée de la bibliothèque.
+    pub fn write_new(&mut self, id: &str, png: &[u8], thumb: &[u8]) -> std::io::Result<Option<Value>> {
+        if !self.writing.remove(id) {
+            return Ok(None);
+        }
+        let Some(entry) = self.entries.get(id) else { return Ok(None) };
+        let dir = entry.folder.join(DATA_DIR);
+        let original = Self::data_path(entry, ".png");
+        let written = if entry.rev == 0.0 {
+            write_atomic(&original, png, &dir)
+                .and_then(|_| write_atomic(&entry.folder.join(&entry.file), png, &dir))
+                .and_then(|_| write_atomic(&Self::data_path(entry, ".jpg"), thumb, &dir))
+                .and_then(|_| Self::write_data(entry, &json!([])))
+        } else if !original.exists() {
+            write_atomic(&original, png, &dir)
+        } else {
+            Ok(())
+        };
+        match written {
+            Ok(()) => Ok(Some(Self::item(entry))),
+            Err(err) => {
+                self.entries.remove(id);
+                Err(err)
+            }
+        }
     }
 
     /// Enregistre les modifications faites dans l'éditeur. `rev` augmente à chaque modification : un envoi plus

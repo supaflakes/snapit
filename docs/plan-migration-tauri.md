@@ -378,6 +378,48 @@ fournit pas de nouvelle image sans nos fenêtres. Depuis la phase 2, la capture 
 | Capture plein écran → éditeur | 156 ms | **110 à 120 ms** |
 | Raccourci → sélection, aucune fenêtre de Snapit | 31 ms | 31 à 39 ms (inchangé) |
 
+### Après la migration — mémoire de l'éditeur et fin de capture
+
+**Mémoire de l'éditeur.** Avec l'éditeur ouvert, la mesure détaille maintenant chaque processus. Sur environ
+460 Mo de mémoire de travail, il y a 220 Mo de mémoire privée, dont 100 Mo pour le processus graphique de WebView2.
+
+- **Retenu :** un éditeur passé en arrière-plan depuis 5 s demande à WebView2 de réduire sa mémoire
+  (`MemoryUsageTargetLevel` à « faible »). Il revient à la normale dès qu'il reprend le premier plan. Le délai évite
+  de vider les caches pour un simple passage par une boîte de dialogue ou par l'overlay. Gain : 65 à 110 Mo de
+  mémoire vive (460 → 395 Mo). Sans ce réglage, la mémoire ne bouge pas (vérifié).
+- **Écartés :**
+  - `--in-process-gpu` : 30 à 50 Mo privés de moins, mais la capture plein écran ralentit de 15 ms, et un plantage
+    du rendu emporterait tout le moteur de pages ;
+  - `--disable-gpu` : 80 Mo de moins, mais l'éditeur dessinerait sans la carte graphique ;
+  - couper les services réseau de fond : aucun gain mesurable.
+- **Mesure corrigée :** un processus étranger pouvait être compté comme enfant de Snapit, quand Windows avait
+  réattribué le numéro de son parent disparu (1 081 Mo relevés une fois, le Snapit installé compris). Un enfant
+  doit maintenant être né après son parent.
+
+**Fin de capture.** Avant, l'éditeur attendait le PNG, puis la miniature, puis l'écriture des fichiers de la
+bibliothèque.
+
+- La miniature est calculée en même temps que le PNG. La capture est réservée dans la bibliothèque (identifiant et
+  nom de fichier) et ses fichiers sont écrits après l'envoi à l'éditeur. D'ici là, elle n'apparaît pas dans la
+  galerie, et une modification déjà enregistrée par l'éditeur n'est pas écrasée. L'envoi à l'éditeur passe de
+  70–94 ms à environ 56 ms.
+- **Presse-papiers :** arboard réencodait un PNG avec une compression lente, ce qui occupait le processeur pendant
+  220 ms. Ce temps tombait au moment où l'éditeur décodait l'image. Snapit écrit maintenant lui-même le presse-papiers,
+  avec son PNG déjà encodé et un bitmap CF_DIBV5 pour les autres applications. La capture est collable environ
+  110 ms après le raccourci, au lieu de 300 ms.
+- **Essai écarté :** envoyer d'abord une image non compressée (BMP, prête en 20 ms). Pour un écran 2560×1600, elle
+  pèse 16 Mo, et WebView2 met environ 275 ms à la recevoir et la décoder, contre environ 45 ms pour le PNG de
+  860 Ko. La capture plein écran passait de 110 à 330 ms.
+- Le temps restant, environ 45 ms entre l'envoi et l'image affichée, se passe dans la page de l'éditeur : décodage
+  et dessin. C'est là que se trouverait le prochain gain.
+
+| | Avant | Après |
+| --- | --- | --- |
+| Éditeur ouvert, en arrière-plan | ≈ 460 Mo | **≈ 395 Mo** |
+| Capture plein écran → éditeur | 107 à 111 ms | 95 à 116 ms (inchangé, à la mesure près) |
+| Capture plein écran → presse-papiers | ≈ 300 ms | **≈ 110 ms** |
+| Capture plein écran → fichiers de la bibliothèque | 70 à 94 ms, avant l'affichage | ≈ 65 ms, après l'affichage |
+
 ## 5. Tests
 
 - **Interface** : le mode démo dans un navigateur (`src/editor/index.html?demo`) reste utilisable tel quel.

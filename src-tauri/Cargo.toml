@@ -30,6 +30,8 @@ sha1_smol = "1"
 tokio = { version = "1", features = ["sync", "time"] }
 futures = "0.3"
 windows-numerics = "0.2" # même version que le crate windows
+webview2-com = "0.39" # même version que Tauri (wry)
+windows-core-webview = { package = "windows-core", version = "0.62" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
@@ -49,6 +51,7 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_DirectWrite",
   "Win32_System_Performance",
   "Win32_System_Memory",
+  "Win32_System_DataExchange",
   "Win32_Graphics_Imaging",
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",

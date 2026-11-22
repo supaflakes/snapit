@@ -113,13 +113,14 @@ pub fn grab_screen(x: i32, y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
 
 /// Mémoire de travail (octets) de ce processus et de ses descendants (WebView2, assistants).
 pub fn memory_of_process_tree() -> u64 {
-    memory_by_process().iter().map(|(_, bytes)| bytes).sum()
+    memory_by_process().iter().map(|(_, bytes, _)| bytes).sum()
 }
 
-/// Mémoire de travail de ce processus et de chacun de ses descendants : (nom de l'exécutable, octets).
-pub fn memory_by_process() -> Vec<(String, u64)> {
+/// Mémoire de ce processus et de chacun de ses descendants : (nom de l'exécutable, mémoire de travail, mémoire
+/// privée), en octets.
+pub fn memory_by_process() -> Vec<(String, u64, u64)> {
     use windows::Win32::System::Diagnostics::ToolHelp::*;
-    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
     use windows::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return Vec::new() };
@@ -135,13 +136,22 @@ pub fn memory_by_process() -> Vec<(String, u64)> {
             }
         }
         let _ = windows::Win32::Foundation::CloseHandle(snapshot);
+        // heure de création : le numéro d'un parent disparu peut avoir été réattribué à un autre processus
+        let created = |pid: u32| -> u64 {
+            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return u64::MAX };
+            let (mut c, mut e, mut k, mut u) = Default::default();
+            let ok = windows::Win32::System::Threading::GetProcessTimes(process, &mut c, &mut e, &mut k, &mut u).is_ok();
+            let _ = windows::Win32::Foundation::CloseHandle(process);
+            if ok { ((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64 } else { u64::MAX }
+        };
         let mut tree = vec![GetCurrentProcessId()];
         let mut i = 0;
         while i < tree.len() {
             let parent = tree[i];
+            let parent_created = created(parent);
             for (pid, ppid, _) in &parents {
                 let (pid, ppid) = (*pid, *ppid);
-                if ppid == parent && pid != parent && !tree.contains(&pid) {
+                if ppid == parent && pid != parent && !tree.contains(&pid) && created(pid) >= parent_created {
                     tree.push(pid);
                 }
             }
@@ -151,9 +161,10 @@ pub fn memory_by_process() -> Vec<(String, u64)> {
         for pid in tree {
             let name = parents.iter().find(|(p, _, _)| *p == pid).map(|(_, _, n)| n.clone()).unwrap_or_default();
             if let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-                let mut counters = PROCESS_MEMORY_COUNTERS::default();
-                if GetProcessMemoryInfo(process, &mut counters, std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32).is_ok() {
-                    out.push((name, counters.WorkingSetSize as u64));
+                let mut c = PROCESS_MEMORY_COUNTERS_EX::default();
+                let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+                if GetProcessMemoryInfo(process, &mut c as *mut _ as *mut PROCESS_MEMORY_COUNTERS, size).is_ok() {
+                    out.push((name, c.WorkingSetSize as u64, c.PrivateUsage as u64));
                 }
                 let _ = windows::Win32::Foundation::CloseHandle(process);
             }

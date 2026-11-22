@@ -81,10 +81,14 @@ const IMAGES_KEPT: usize = 6;
 
 /// Adresse sous laquelle l'éditeur peut charger cette image PNG.
 pub fn publish_image(png: Vec<u8>) -> String {
+    publish_shared(Arc::new(png))
+}
+
+fn publish_shared(png: Arc<Vec<u8>>) -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let id = SEQ.fetch_add(1, Ordering::SeqCst) + 1;
     let mut images = IMAGES.lock().unwrap();
-    images.push((id, Arc::new(png)));
+    images.push((id, png));
     let excess = images.len().saturating_sub(IMAGES_KEPT);
     images.drain(..excess);
     format!("{SNAPIT_ORIGIN}/image/{id}.png")
@@ -94,7 +98,7 @@ pub fn publish_image(png: Vec<u8>) -> String {
 pub fn serve(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     let not_found = || tauri::http::Response::builder().status(404).body(Vec::new()).unwrap();
     let path = request.uri().path();
-    if let Some(id) = path.strip_prefix("/image/").and_then(|p| p.trim_end_matches(".png").parse::<u64>().ok()) {
+    if let Some(id) = path.strip_prefix("/image/").and_then(|p| p.split('.').next()).and_then(|p| p.parse::<u64>().ok()) {
         let png = IMAGES.lock().unwrap().iter().find(|(i, _)| *i == id).map(|(_, png)| png.clone());
         let Some(png) = png else { return not_found() };
         return tauri::http::Response::builder()
@@ -269,45 +273,65 @@ fn contains([x, y, w, h]: [i32; 4], px: f64, py: f64) -> bool {
     px >= x as f64 && px < (x + w) as f64 && py >= y as f64 && py < (y + h) as f64
 }
 
-/// Copie la capture dans le presse-papiers et l'enregistre dans la bibliothèque (selon les paramètres), puis
-/// l'ouvre dans l'éditeur.
+/// Ouvre la capture dans l'éditeur, puis la copie dans le presse-papiers et l'enregistre dans la bibliothèque
+/// (selon les paramètres). Seul l'encodage du PNG retarde l'affichage : la miniature est calculée en même temps,
+/// le presse-papiers et les fichiers de la bibliothèque viennent après. (Une image non compressée, prête plus tôt,
+/// mettrait bien plus longtemps à parvenir à l'éditeur : 16 Mo pour un écran 2560×1600.)
 pub async fn deliver(result: CaptureResult) {
     let settings = app().settings.get();
     let CaptureResult { image, png, scale, mut notice } = result;
-    let (image, png, thumb) = tauri::async_runtime::spawn_blocking(move || {
-        let png = png.unwrap_or_else(|| images::encode_png(&image));
-        let thumb = images::thumbnail_jpeg(&image);
-        (image, png, thumb)
+    let image = Arc::new(image);
+    let encoding = image.clone();
+    let encoded = tauri::async_runtime::spawn_blocking(move || {
+        let image = &encoding;
+        std::thread::scope(|s| {
+            let thumb = s.spawn(|| images::thumbnail_jpeg(image));
+            let png = png.unwrap_or_else(|| images::encode_png(image));
+            (Arc::new(png), thumb.join().unwrap_or_default())
+        })
     })
-    .await
-    .expect("encodage");
+    .await;
+    let Ok((png, thumb)) = encoded else { return };
     crate::measure::trace("PNG et miniature encodés");
     let name = capture_name();
-    let mut library_id = Value::Null;
-    if settings.auto_save {
+    let (width, height) = (image.width(), image.height());
+    let reserved = if settings.auto_save {
         let folder = crate::library_folder();
-        let created = app().library.lock().unwrap().create(&folder, &png, &thumb, &name, scale, image.width(), image.height());
-        match created {
-            Ok(item) => {
-                library_id = item["id"].clone();
-                crate::send_to_editors("library:changed", json!({ "type": "add", "item": item }));
-            }
-            Err(_) => notice = Some(t("toast.autosaveFailed", &[])), // la capture s'ouvre quand même, sans enregistrement
+        let reserved = app().library.lock().unwrap().reserve(&folder, &name, scale, width, height);
+        if reserved.is_err() {
+            notice = Some(t("toast.autosaveFailed", &[])); // la capture s'ouvre quand même, sans enregistrement
         }
-    }
+        reserved.ok()
+    } else {
+        None
+    };
     let payload = json!({
-        "dataUrl": publish_image(png),
+        "dataUrl": publish_shared(png.clone()),
         "scaleFactor": scale,
         "name": name,
         "copied": settings.copy_after_capture,
         "notice": notice,
-        "libraryId": library_id,
+        "libraryId": reserved,
     });
-    crate::measure::trace("enregistrée, envoi à l'éditeur");
+    crate::measure::trace("envoi à l'éditeur");
     crate::editors::open_image(payload, None);
-    // copie dans le presse-papiers pendant que l'éditeur affiche l'image
-    if settings.copy_after_capture {
-        let _ = tauri::async_runtime::spawn_blocking(move || images::write_clipboard(&image)).await;
+
+    // pendant que l'éditeur affiche l'image
+    let clipboard = settings.copy_after_capture.then(|| {
+        let png = png.clone();
+        tauri::async_runtime::spawn_blocking(move || images::write_clipboard(&image, &png))
+    });
+    if let Some(id) = reserved {
+        let written = tauri::async_runtime::spawn_blocking(move || app().library.lock().unwrap().write_new(&id, &png, &thumb)).await;
+        match written {
+            Ok(Ok(Some(item))) => crate::send_to_editors("library:changed", json!({ "type": "add", "item": item })),
+            Ok(Ok(None)) => {}
+            _ => crate::notify("Snapit", &t("toast.autosaveFailed", &[])),
+        }
+        crate::measure::trace("enregistrée dans la bibliothèque");
+    }
+    if let Some(clipboard) = clipboard {
+        let _ = clipboard.await;
         crate::measure::trace("copiée dans le presse-papiers");
     }
 }
