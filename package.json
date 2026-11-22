@@ -1,7 +1,7 @@
 {
   "name": "snapit",
   "productName": "Snapit",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Capture d'écran et annotations pour Windows",
   "private": true,
   "author": "Snapit",
