@@ -84,6 +84,17 @@ pub fn install() {
                 }
             }
             app().quitting.store(true, Ordering::SeqCst);
+            // L'assistant clavier (snapit.exe --keyhook) est arrêté d'abord : encore en train de se fermer au démarrage
+            // de l'installateur, il le faisait échouer (« Failed to kill Snapit »).
+            let keyhook = {
+                let mut hotkeys = app().hotkeys.lock().unwrap();
+                let pid = hotkeys.hook_pid();
+                hotkeys.dispose();
+                pid
+            };
+            if let Some(pid) = keyhook {
+                tauri::async_runtime::spawn_blocking(move || crate::win::wait_for_exit(pid, Duration::from_secs(2))).await.ok();
+            }
             // Windows : l'installateur prend le relais et Snapit se ferme
             update.install(bytes).map_err(|e| e.to_string())
         }

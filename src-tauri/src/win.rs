@@ -173,6 +173,17 @@ pub fn memory_by_process() -> Vec<(String, u64, u64)> {
     }
 }
 
+/// Attend la fin du processus `pid` (au plus `timeout`).
+pub fn wait_for_exit(pid: u32, timeout: std::time::Duration) {
+    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    unsafe {
+        if let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            WaitForSingleObject(process, timeout.as_millis() as u32);
+            let _ = windows::Win32::Foundation::CloseHandle(process);
+        }
+    }
+}
+
 /// Mémoire privée réservée par ce processus (octets), qu'elle soit en mémoire vive ou non.
 pub fn private_memory() -> u64 {
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
