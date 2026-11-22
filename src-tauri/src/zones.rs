@@ -1,4 +1,4 @@
-// Détection des zones et capture défilante, en Rust (remplace l'assistant C# src/native/regions.cs) :
+// Détection des zones et capture défilante :
 // - fenêtres visibles et leurs sous-fenêtres, pour la sélection de zone ;
 // - éléments d'interface sous la souris (UI Automation), du plus grand au plus petit ;
 // - capture défilante d'une page web (ou de toute zone qui défile) : défilement par UI Automation, captures

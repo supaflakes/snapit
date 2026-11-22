@@ -1,50 +1,19 @@
 {
   "name": "snapit",
   "productName": "Snapit",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Capture d'écran et annotations pour Windows",
-  "main": "src/main.js",
   "private": true,
   "author": "Snapit",
   "scripts": {
-    "start": "electron .",
+    "start": "tauri dev",
+    "dist": "node scripts/dist.js",
+    "selftest": "cargo run --release --manifest-path src-tauri/Cargo.toml -- --selftest",
+    "measure": "cargo run --release --manifest-path src-tauri/Cargo.toml -- --measure",
     "icons": "node scripts/generate-icons.js",
-    "smoke": "electron scripts/smoke-test.js",
-    "scroll-test": "electron scripts/scroll-test.js",
-    "measure": "electron scripts/measure.js",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:dist": "tauri build",
-    "tauri:selftest": "cargo run --release --manifest-path src-tauri/Cargo.toml -- --selftest",
-    "tauri:measure": "cargo run --release --manifest-path src-tauri/Cargo.toml -- --measure",
-    "dist": "electron-builder --win"
-  },
-  "build": {
-    "appId": "com.snapit.app",
-    "productName": "Snapit",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "assets/**/*",
-      "package.json"
-    ],
-    "win": {
-      "target": "nsis",
-      "icon": "assets/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
+    "tauri": "tauri"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.6",
-    "electron": "^44.4.5",
-    "electron-builder": "^26.15.3"
-  },
-  "allowScripts": {
-    "electron@44.4.5": true
+    "@tauri-apps/cli": "^2.12.6"
   }
 }

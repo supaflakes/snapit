@@ -19,7 +19,7 @@ struct Marks {
 
 static MARKS: OnceLock<Mutex<Marks>> = OnceLock::new();
 
-fn enabled() -> bool {
+pub fn enabled() -> bool {
     std::env::args().any(|a| a == "--measure")
 }
 

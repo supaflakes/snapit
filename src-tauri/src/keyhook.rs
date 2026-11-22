@@ -1,4 +1,4 @@
-// Hook clavier bas niveau (remplace l'assistant C# src/native/keyhook.cs) : intercepte les raccourcis de capture
+// Hook clavier bas niveau : intercepte les raccourcis de capture
 // (Impr. écran, Win+Maj+S…) avant l'Outil Capture de Windows. Il n'enregistre ni ne transmet aucune autre
 // frappe : seules les combinaisons demandées sont reconnues, bloquées et signalées.
 //

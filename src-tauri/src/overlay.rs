@@ -1,7 +1,6 @@
-// Overlay de sélection natif : une fenêtre Win32 par écran, dessinée en Direct2D, qui remplace la page
-// src/overlay/overlay.html de la version Electron. Même apparence et même comportement que overlay.js : fond
-// assombri, zone détectée en surbrillance, sélection libre, dimensions, loupe, bouton « Capturer toute la page » et
-// avancement de la capture défilante.
+// Overlay de sélection natif : une fenêtre Win32 par écran, dessinée en Direct2D. Fond assombri, zone détectée en
+// surbrillance, sélection libre, dimensions, loupe, bouton « Capturer toute la page » et avancement de la capture
+// défilante.
 //
 // Toutes les fenêtres vivent sur un fil dédié, avec sa propre boucle de messages : l'affichage ne dépend ni de la
 // boucle de Tauri ni de WebView2. Les autres fils lui envoient des commandes (`send`).

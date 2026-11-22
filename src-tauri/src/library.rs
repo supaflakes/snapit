@@ -1,4 +1,4 @@
-// Bibliothèque des captures : même format de dossier que la version Electron (src/library.js), si bien que les
+// Bibliothèque des captures : même format de dossier que les versions Electron (jusqu'à la 0.4), si bien que les
 // captures existantes restent lisibles et modifiables.
 //
 //   <dossier>\Capture 2026-09-29 à 14.03.22.png   image annotée, telle qu'exportée

@@ -4,10 +4,18 @@ Capture d'écran et annotations pour Windows, dans l'esprit de Snagit.
 
 ## Démarrer
 
+Prérequis : Node.js et Rust (rustup, avec les outils de compilation MSVC). L'interface s'affiche avec WebView2,
+inclus dans Windows 11.
+
 ```bash
 npm install
 npm start
 ```
+
+Snapit est écrit en Rust avec [Tauri](https://tauri.app) : la capture, la sélection de zone, la détection des zones,
+la capture défilante et les raccourcis sont natifs ; l'éditeur et les paramètres sont des pages web. Jusqu'à la
+version 0.4, Snapit reposait sur Electron (installateur de 106 Mo) ; l'histoire de la migration et ses mesures sont
+dans `docs/plan-migration-tauri.md`. Les paramètres et la bibliothèque des versions Electron sont repris tels quels.
 
 Snapit s'installe dans la zone de notification : fermer l'éditeur ne quitte pas l'application
 (clic droit sur l'icône → **Quitter Snapit**).
@@ -39,15 +47,14 @@ Une zone choisie à la molette reste sélectionnée tant que la souris ne la qui
 sous le curseur et la taille de la zone. Le multi-écran et les échelles mixtes (ex. 4K à 150 % + 1080p à 100 %)
 sont gérés.
 
-La détection repose sur un second petit assistant (`src/native/regions.cs`), compilé comme celui du clavier : au
-moment de la capture, il relève la position des fenêtres visibles et de leurs sous-fenêtres, puis, sous la souris,
-celle des éléments d'interface grâce à UI Automation (l'interface d'accessibilité de Windows). Il ne lit que des
-positions et des types d'éléments, jamais de texte. L'option « Détecter les fenêtres et les zones sous la souris »
+Au moment de la capture, Snapit relève la position des fenêtres visibles et de leurs sous-fenêtres, puis, sous la
+souris, celle des éléments d'interface grâce à UI Automation (l'interface d'accessibilité de Windows). Il ne lit que
+des positions et des types d'éléments, jamais de texte. L'option « Détecter les fenêtres et les zones sous la souris »
 des paramètres la désactive : un clic capture alors l'écran entier, comme avant.
 
-Ce même assistant réalise la capture de l'écran elle-même, en quelques dizaines de millisecondes. Les fenêtres de
-Snapit restent affichées mais sont retirées de l'image (Windows 10 2004 et suivants), si bien que l'overlay
-apparaît presque instantanément. Si l'assistant n'est pas disponible, la capture passe par Electron, plus lente.
+L'écran est copié directement depuis la carte graphique (duplication du bureau DXGI) en une quinzaine de
+millisecondes, et la sélection s'affiche environ 30 ms après le raccourci. Les fenêtres de Snapit restent affichées
+mais sont retirées de l'image (Windows 10 2004 et suivants).
 
 ### Capturer toute la page (capture défilante)
 
@@ -62,7 +69,7 @@ qu'on ne voit qu'en faisant défiler :
 - la page revient ensuite là où elle était ;
 - `Échap` arrête la capture en gardant ce qui est déjà capturé.
 
-Le défilement passe par UI Automation (c'est l'assistant des zones qui s'en charge) : le bouton apparaît aussi,
+Le défilement passe par UI Automation : le bouton apparaît aussi,
 sous le nom **Capturer toute la zone**, sur les autres zones qui défilent quand l'application les décrit à Windows.
 La capture s'arrête à 30 000 pixels de haut. Comme dans Snagit, ce qui reste fixe à l'écran dans le bas de la page
 ou sur presque toute sa hauteur (bouton flottant, barre latérale pleine hauteur, notification) se répète à chaque
@@ -97,9 +104,10 @@ l'enregistrement classique (`Ctrl+S`).
 ### Impr. écran et l'Outil Capture de Windows
 
 Sous Windows 11, `Impr. écran` ouvre normalement l'Outil Capture. Tant que Snapit est ouvert (et que l'option
-« Utiliser Impr. écran pour Snapit » est active), un petit assistant intercepte la touche avant Windows :
-un hook clavier bas niveau (`src/native/keyhook.cs`) qui ne reconnaît que les combinaisons de capture configurées.
-Il est compilé au premier lancement avec le compilateur C# fourni avec Windows (.NET Framework) et se ferme avec Snapit.
+« Utiliser Impr. écran pour Snapit » est active), Snapit intercepte la touche avant Windows : un hook clavier bas
+niveau qui ne reconnaît que les combinaisons de capture configurées. Il tourne dans un petit processus à part
+(`snapit.exe --keyhook`, environ 9 Mo), car Windows ne transmet pas Impr. écran au hook d'une application dont une
+fenêtre est au premier plan ; il se ferme avec Snapit.
 Aucun réglage de Windows n'est modifié : l'Outil Capture reprend la main dès que Snapit est fermé.
 
 Beaucoup de claviers (ou leur logiciel) n'envoient pas vraiment Impr. écran mais `Win+Maj+S`, le raccourci de
@@ -174,24 +182,33 @@ On peut aussi glisser-déposer une image dans la fenêtre.
 
 Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 
+## Mises à jour
+
+Snapit vérifie au démarrage, puis toutes les 6 heures, si une nouvelle version est publiée sur GitHub. Si oui, une
+notification le signale et le menu de l'icône propose **Installer la mise à jour** : rien n'est téléchargé ni installé
+sans votre accord. Les fenêtres de l'éditeur sont fermées (avec confirmation s'il reste des modifications non
+enregistrées), l'installateur remplace Snapit et le relance. Les mises à jour sont signées : Snapit refuse un fichier
+qui ne porte pas la signature de son auteur.
+
 ## Développement
 
-- `npm run smoke` : test de bout en bout (Impr. écran simulée, paramètres et langue, détection des fenêtres et des
-  éléments de page, capture plein écran, sélection de zone simulée, annotations, réglages, Mes préréglages,
-  annuler/rétablir, presse-papiers, bibliothèque et galerie, capture défilante d'une page de test ouverte dans un
-  processus à part par `scripts/smoke-page.js`).
-  Affiche brièvement l'overlay de sélection. Il utilise son propre profil et sa propre bibliothèque
-  (dans `%TEMP%\snapit-smoke`) : vos paramètres et vos captures ne sont pas touchés.
-- `npm run scroll-test` : capture défilante de pages de test difficiles (en-tête opaque ou translucide, barre
-  latérale collante, barre latérale presque pleine hauteur, bouton flottant), sans overlay ni touches simulées :
-  l'image doit couvrir toute la page, chaque bande à sa place, la barre latérale une seule fois. Images dans
-  `%TEMP%\snapit-scroll-test`.
-- `npm run measure` : mesures de performance (démarrage, délai avant l'overlay et son détail, capture plein
-  écran, mémoire, taille de l'installeur), avec un profil et une bibliothèque à part. Résultats dans
-  `%TEMP%\snapit-measure\mesures.json`. Voir `docs/plan-migration-tauri.md`.
+- `npm start` : lance Snapit en développement (`F12` ouvre les outils de développement de WebView2).
+- `npm run selftest` : test de bout en bout, avec un profil et une bibliothèque à part dans
+  `%TEMP%\snapit-selftest` : vos paramètres et vos captures ne sont pas touchés. Il couvre les touches réelles
+  (Impr. écran, `Win+Maj+S`, enregistrement d'un raccourci), l'overlay de sélection (rendu, clavier, zone tracée à la
+  souris), la capture défilante de pages de test ouvertes dans un processus à part (`snapit.exe --test-page`), dont
+  des pages difficiles (en-tête translucide, barre latérale collante, bouton flottant), le chemin complet depuis le
+  bouton « Capturer toute la page », les annotations enregistrées automatiquement, les paramètres et la langue, la
+  capture plein écran (l'éditeur affiché n'y figure pas), le presse-papiers, la galerie et le chargement du module
+  de mise à jour. Captures d'écran de contrôle et rapport dans ce même dossier.
+- `npm run measure` : mesures de performance (démarrage, délai avant l'overlay et son détail, capture plein écran,
+  mémoire), avec un profil à part. Résultats dans `%TEMP%\snapit-measure-tauri\mesures.json`.
+- `npm run dist` : construit l'installateur et la mise à jour signée dans `src-tauri\target\release\bundle\nsis` :
+  `Snapit_<version>_x64-setup.exe`, sa signature (`.sig`) et `latest.json`, à joindre tous trois à la publication
+  GitHub `v<version>`. La clé privée de signature est lue dans `TAURI_SIGNING_PRIVATE_KEY`, sinon dans
+  `%USERPROFILE%\.tauri\snapit-updater.key` ; elle ne doit jamais être publiée. Sans elle, les installations
+  existantes ne peuvent plus être mises à jour.
 - `npm run icons` : régénère les icônes de `assets/`.
-- `npm run dist` : construit l'installateur Windows dans `dist/`.
-- `F12` ouvre les outils de développement (hors version packagée).
 - L'éditeur et les paramètres fonctionnent aussi dans un navigateur pour itérer sur l'interface :
   servir la racine du projet puis ouvrir `src/editor/index.html?demo` (ajouter `&lang=en` pour l'anglais)
   ou `src/settings/index.html`.
@@ -199,23 +216,21 @@ Les paramètres sont enregistrés dans `%APPDATA%\snapit\settings.json`.
 ## Structure
 
 ```
-src/main.js            processus principal : zone de notification, capture, fenêtres, IPC
-src/settings.js        paramètres de l'application (settings.json)
-src/library.js         bibliothèque des captures (enregistrement automatique, galerie)
-src/hotkeys.js         raccourcis globaux et assistant clavier
-src/regions.js         détection des fenêtres et des éléments d'interface pour la sélection de zone,
-                       capture défilante
-src/native/helper.js   compilation des assistants natifs (compilateur C# fourni avec Windows)
-src/native/keyhook.cs  assistant clavier (hook bas niveau) pour Impr. écran
-src/native/regions.cs  assistant de détection : fenêtres, sous-fenêtres, éléments UI Automation ;
-                       capture défilante (défilement, captures, assemblage)
-src/i18n.js            traductions français / anglais, partagées par toutes les fenêtres
-src/theme.css          couleurs des thèmes sombre et clair
-src/preload.js         pont IPC exposé aux pages (contextIsolation + sandbox)
-src/overlay/           sélection de zone plein écran (une fenêtre par écran) ; la version Tauri la
-                       dessine en natif (src-tauri/src/overlay.rs)
-src/editor/shapes.js   modèle, rendu et géométrie des annotations
-src/editor/editor.js   interface de l'éditeur : outils, préréglages, historique, zoom, export,
-                       enregistrement automatique et galerie
-src/settings/          fenêtre des paramètres
+src/editor/shapes.js       modèle, rendu et géométrie des annotations
+src/editor/editor.js       interface de l'éditeur : outils, préréglages, historique, zoom, export,
+                           enregistrement automatique et galerie
+src/settings/              fenêtre des paramètres
+src/bridge.js              API window.snapit des pages, au-dessus de Tauri
+src/i18n.js                traductions français / anglais, partagées par les pages et Snapit
+src/theme.css              couleurs des thèmes sombre et clair
+src-tauri/src/main.rs      démarrage, zone de notification, fenêtres
+src-tauri/src/commands.rs  commandes appelées par les pages
+src-tauri/src/capture.rs   capture d'écran (dxgi.rs : duplication du bureau ; win.rs : GDI) et sélection
+src-tauri/src/overlay.rs   overlay de sélection natif (Win32, Direct2D)
+src-tauri/src/zones.rs     détection des fenêtres et des éléments d'interface (UI Automation), capture défilante
+src-tauri/src/hotkeys.rs   raccourcis ; keyhook.rs : hook clavier bas niveau (processus --keyhook)
+src-tauri/src/editors.rs   fenêtres de l'éditeur et des paramètres
+src-tauri/src/library.rs   bibliothèque des captures ; settings.rs : paramètres ; images.rs : PNG, JPEG, presse-papiers
+src-tauri/src/updater.rs   mise à jour automatique
+src-tauri/src/selftest.rs  test de bout en bout ; testpage.rs : page de test ; measure.rs : mesures
 ```

@@ -1,4 +1,4 @@
-// Paramètres de l'application : même fichier et même format que la version Electron (src/settings.js),
+// Paramètres de l'application : même fichier et même format que les versions Electron (jusqu'à la 0.4),
 // %APPDATA%\snapit\settings.json.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

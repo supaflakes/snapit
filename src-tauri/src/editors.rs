@@ -1,4 +1,4 @@
-// Fenêtres de l'éditeur et des paramètres (comme la partie « Éditeur » de src/main.js).
+// Fenêtres de l'éditeur et des paramètres.
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;

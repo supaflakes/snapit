@@ -1,4 +1,4 @@
-// Capture d'écran et sélection de zone (comme la partie « Capture » de src/main.js).
+// Capture d'écran et sélection de zone.
 // Chaque écran est capturé directement en Rust (DXGI ou GDI) ; l'overlay natif (overlay.rs) affiche la capture
 // figée, une fenêtre par écran, gardée prête d'une capture à l'autre.
 use image::RgbaImage;

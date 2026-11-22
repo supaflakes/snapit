@@ -1,6 +1,6 @@
-// Snapit, version Tauri : zone de notification, fenêtres, capture, commandes des pages.
-// Les pages (src/editor, src/settings, src/overlay) sont celles de la version Electron ; src/bridge.js leur fournit
-// la même API `window.snapit`.
+// Snapit : zone de notification, fenêtres, capture, commandes des pages.
+// L'éditeur et les paramètres sont des pages web (src/editor, src/settings) affichées par WebView2 ; src/bridge.js
+// leur fournit l'API `window.snapit`. La capture, la sélection de zone et les raccourcis sont natifs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod capture;
@@ -17,6 +17,8 @@ mod measure;
 mod overlay;
 mod selftest;
 mod settings;
+mod testpage;
+mod updater;
 mod win;
 mod zones;
 
@@ -171,7 +173,7 @@ fn tray_menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(handle, id, text, true, None::<&str>)
     };
     let delay = s.capture_delay.to_string();
-    Menu::with_items(
+    let menu = Menu::with_items(
         handle,
         &[
             &item("region", "tray.region", &[], Some(&s.shortcuts.region))?,
@@ -184,7 +186,12 @@ fn tray_menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &item("settings", "tray.settings", &[], None)?,
             &item("quit", "tray.quit", &[], None)?,
         ],
-    )
+    )?;
+    // mise à jour prête : proposée en tête du menu
+    if let Some(version) = updater::pending_version() {
+        menu.prepend_items(&[&item("update", "tray.update", &[("version", &version)], None)?, &PredefinedMenuItem::separator(handle)?])?;
+    }
+    Ok(menu)
 }
 
 pub fn refresh_tray() {
@@ -230,6 +237,7 @@ fn on_menu(id: &str) {
             });
         }
         "settings" => editors::open_settings(),
+        "update" => updater::install(),
         "quit" => quit(),
         _ => {
             // menu contextuel d'une miniature : « gallery|<fenêtre>|<action>|<capture> »
@@ -292,7 +300,7 @@ fn data_dir() -> PathBuf {
     if let Some(dir) = measure::profile_dir().or_else(selftest::profile_dir) {
         return dir;
     }
-    // même dossier que la version Electron : paramètres et assistants compilés partagés
+    // même dossier que les versions Electron (jusqu'à la 0.4) : paramètres et bibliothèque repris tels quels
     PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("snapit")
 }
 
@@ -336,6 +344,7 @@ fn setup(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     measure::start();
     selftest::start();
+    updater::start();
     Ok(())
 }
 
@@ -343,6 +352,11 @@ fn main() {
     // processus du hook clavier, lancé par Snapit lui-même (voir keyhook.rs)
     if std::env::args().any(|a| a == keyhook::ARG) {
         std::process::exit(keyhook::run_helper());
+    }
+    let context = tauri::generate_context!();
+    // page de test de l'autotest, dans un processus à part (voir testpage.rs)
+    if std::env::args().any(|a| a == testpage::ARG) {
+        return testpage::run(context);
     }
     measure::mark_start();
     let app = tauri::Builder::default()
@@ -359,7 +373,7 @@ fn main() {
             setup(app.handle())?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("démarrage de Snapit");
 
     app.run(|handle, event| match event {

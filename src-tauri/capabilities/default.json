@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Pages de Snapit : éditeur, paramètres, overlay de sélection",
+  "description": "Pages de Snapit : éditeur et paramètres",
   "windows": ["*"],
   "permissions": ["core:default"]
 }

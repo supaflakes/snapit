@@ -303,6 +303,50 @@ Non vérifié :
 - Installeur Tauri, signature du code, mise à jour automatique (plugin `updater`), éventuellement.
 - Suppression d'Electron, de `electron-builder` et de `src/native/`.
 
+**Faite (21/11/2026) : Snapit 0.5.0 ne contient plus Electron.**
+
+- **Déjà acquis :** les WebView de l'éditeur et des paramètres sont détruites à leur fermeture depuis la phase 1 :
+  au repos, il ne reste que le cœur natif et le processus du hook clavier. Les captures sont encodées en Rust (PNG,
+  miniature JPEG). L'éditeur refait seulement la miniature d'une capture annotée, car c'est lui qui dessine les
+  annotations.
+- **Electron retiré :** `electron` et `electron-builder`, `src/main.js`, `src/preload.js`, les modules Node de
+  `src/`, `src/native/` (assistants C#), la page `src/overlay/` et les scripts de test Electron. `node_modules` passe
+  de plusieurs centaines de Mo à 17 Mo. `npm start`, `npm run dist`, `npm run selftest` et `npm run measure` visent
+  désormais Tauri.
+- **Page de test sans Electron :** la page de la capture défilante est ouverte par Snapit lui-même, dans un autre
+  processus (`snapit.exe --test-page`, `testpage.rs`, avec un profil WebView2 à part). Les pages difficiles de
+  `scroll-test.js` sont portées dans l'autotest : en-tête translucide, barre latérale collante, barre latérale
+  presque pleine hauteur, bouton flottant. Toutes passent avec WebView2. L'autotest compte 58 vérifications.
+- **Contrôle plus robuste :** l'éditeur affiché pendant la capture plein écran est rempli d'une couleur exacte et
+  inhabituelle, au lieu de magenta. Une page magenta ouverte à l'écran (ChatGPT, dans les tests) donnait un faux
+  échec.
+- **Mise à jour automatique** (`updater.rs`, plugin `updater`) :
+  - vérification 30 s après le démarrage puis toutes les 6 heures, sur
+    `releases/latest/download/latest.json` du dépôt GitHub ;
+  - si une version est disponible : notification et élément **Installer la mise à jour** en tête du menu de l'icône ;
+  - rien n'est installé sans le demander : les fenêtres de l'éditeur sont fermées avec la confirmation habituelle,
+    puis l'installateur (mode passif) remplace Snapit et le relance ;
+  - le plugin n'est chargé qu'à la première vérification : chargé au démarrage, il retardait l'ouverture de
+    Snapit d'environ 0,55 s (préparation de son client HTTPS).
+- **Signature des mises à jour :** paire de clés minisign générée par `tauri signer generate`. La clé publique est
+  dans `tauri.conf.json`, la clé privée hors du dépôt (`%USERPROFILE%\.tauri\snapit-updater.key`, sans mot de
+  passe). `npm run dist` (`scripts/dist.js`) signe l'installateur et écrit `latest.json`.
+- **Installateur 0.5.0 :** 2,4 Mo (1,8 Mo en 0.4.1 sous Tauri, 106 Mo avec Electron) : le plugin de mise à jour
+  et son client HTTPS en ajoutent environ 0,6.
+
+Mesures finales (`npm run measure`) : démarrage 0,78 s, overlay en 31 ms (90 ms avec l'éditeur affiché), capture
+plein écran dans l'éditeur en 156 ms, 131 Mo au repos (dont 87 Mo privés).
+
+Non fait :
+
+- **Signature du code (Authenticode)** : elle demande un certificat de signature de code, à acheter. Sans elle,
+  SmartScreen avertit au premier lancement de l'installateur.
+- **Publication de la 0.5.0 sur GitHub** et vérification d'une vraie mise à jour de bout en bout (0.5.0 → 0.5.1).
+  Les versions Electron (0.4.x) n'ont pas de mise à jour automatique : il faut installer la 0.5.0 à la main, puis
+  désinstaller l'ancienne version, installée par un autre installateur.
+- **Vérifications manuelles** encore à faire : menu de la zone de notification, boîtes Enregistrer et Ouvrir,
+  glisser-déposer d'une image, lancement au démarrage, multi-écran.
+
 ## 5. Tests
 
 - **Interface** : le mode démo dans un navigateur (`src/editor/index.html?demo`) reste utilisable tel quel.

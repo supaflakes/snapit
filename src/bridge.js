@@ -1,5 +1,5 @@
-// Pont `window.snapit` de la version Tauri : la même API que src/preload.js (Electron), pour que l'éditeur
-// et les paramètres fonctionnent sans changement. Injecté dans chaque page avant ses scripts.
+// Pont `window.snapit` : l'API des pages (éditeur, paramètres) vers Snapit, au-dessus de invoke() et des
+// événements de Tauri. Injecté dans chaque page avant ses scripts.
 (() => {
   'use strict';
   if (window.snapit) return;
@@ -7,7 +7,7 @@
   // Les objets de Tauri ne sont lus qu'à l'appel : ils sont définis après ce script.
   const tauri = () => window.__TAURI__;
 
-  // Les erreurs Rust arrivent sous forme de texte : on en fait des Error, comme avec Electron.
+  // Les erreurs Rust arrivent sous forme de texte : on en fait des Error.
   const invoke = (command, args) =>
     tauri()
       .core.invoke(command, args)
@@ -74,6 +74,5 @@
     startRecording: () => send('shortcuts_record_start'),
     stopRecording: () => send('shortcuts_record_stop'),
     onRecorded: (callback) => on('shortcuts:recorded', callback),
-    // la sélection de zone est native (src-tauri/src/overlay.rs) : rien à fournir à src/overlay
   });
 })();
