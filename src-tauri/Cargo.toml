@@ -1,6 +1,6 @@
 [package]
 name = "snapit"
-version = "0.5.1"
+version = "0.5.2"
 description = "Capture d'écran et annotations pour Windows"
 edition = "2021"
 publish = false
