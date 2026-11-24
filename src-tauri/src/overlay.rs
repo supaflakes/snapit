@@ -73,12 +73,10 @@ enum Command {
     Show(Box<Show>, oneshot::Sender<()>),
     Focus(usize),
     Hide(usize),
-    HideAll,
     Excluded(usize, bool),
     Progress(usize, f64),
     Probed { index: usize, session: u64, hwnd: i64, at: (f64, f64), found: Value },
     ScrollButton(usize, oneshot::Sender<Option<[f64; 4]>>),
-    Release,
     Destroy,
     Recompose([i32; 4]),
 }
@@ -136,10 +134,12 @@ pub fn hide(index: usize) {
     send(Command::Hide(index));
 }
 
-/// Fin de la sélection : les overlays sont cachés et libèrent leur image ; les fenêtres restent prêtes.
+/// Fin de la sélection : les overlays sont détruits, avec leur image ; ils sont recréés à la sélection suivante.
+/// Gardées cachées, ces fenêtres plein écran au premier plan empêchaient les menus contextuels de Windows 11
+/// (Explorateur, bureau) de réagir à la souris.
 pub fn hide_all() {
     VISIBLE.lock().unwrap().clear();
-    send(Command::HideAll);
+    send(Command::Destroy);
 }
 
 /// Retire l'overlay des captures d'écran (capture défilante) ou l'y remet.
@@ -150,11 +150,6 @@ pub fn set_excluded(index: usize, excluded: bool) {
 /// Avancement de la capture défilante, de 0 à 1.
 pub fn progress(index: usize, value: f64) {
     send(Command::Progress(index, value));
-}
-
-/// Libère les surfaces de dessin (longue période sans capture) ; elles sont recréées à la sélection suivante.
-pub fn release() {
-    send(Command::Release);
 }
 
 /// Oblige Windows à recomposer l'écran [x, y, l, h] (pixels physiques), sans rien y changer de visible : une fenêtre
@@ -722,17 +717,6 @@ impl Thread {
                 }
                 VISIBLE.lock().unwrap().retain(|(i, _, _)| *i != index);
             }
-            Command::HideAll => {
-                for o in self.overlays.values_mut() {
-                    unsafe {
-                        let _ = KillTimer(Some(o.hwnd), PROBE_TIMER);
-                        let _ = ShowWindow(o.hwnd, SW_HIDE);
-                        let _ = SetWindowDisplayAffinity(o.hwnd, WDA_NONE);
-                    }
-                    o.sel = None;
-                    o.bitmap = None; // l'image de l'écran n'est pas gardée entre deux sélections
-                }
-            }
             Command::Excluded(index, excluded) => {
                 if let Some(o) = self.overlays.get(&index) {
                     unsafe {
@@ -757,14 +741,6 @@ impl Thread {
                     Some([b.rect.x * k, b.rect.y * k, b.rect.w * k, b.rect.h * k])
                 });
                 let _ = reply.send(button);
-            }
-            Command::Release => {
-                for o in self.overlays.values_mut().filter(|o| o.sel.is_none()) {
-                    o.bitmap = None;
-                    o.brush = None;
-                    o.target = None;
-                }
-                self.renew_factory();
             }
             Command::Recompose([x, y, _, _]) => {
                 let hwnd = HWND(RECOMPOSE.with(|r| r.get()) as _);

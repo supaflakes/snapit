@@ -95,8 +95,6 @@ pub static LAST_METHOD: Mutex<&str> = Mutex::new("");
 pub static LAST_DELIVERY: Mutex<&str> = Mutex::new("");
 
 const SNAPIT_ORIGIN: &str = "http://snapit.localhost";
-// Après ce délai sans capture, les overlays libèrent leurs surfaces de dessin ; la capture suivante les recrée.
-const OVERLAY_IDLE: Duration = Duration::from_secs(120);
 
 // Images PNG envoyées à l'éditeur (les plus récentes), servies par le protocole snapit:// plutôt qu'encodées en
 // base64 dans les messages.
@@ -485,13 +483,6 @@ fn end_session(result: Option<CaptureResult>) {
     if let Some(done) = session.done.take() {
         let _ = done.send(result);
     }
-    let id = session.id;
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(OVERLAY_IDLE).await;
-        if app().capture.sessions.load(Ordering::SeqCst) == id && app().capture.session.lock().unwrap().is_none() {
-            overlay::release(); // aucune capture depuis
-        }
-    });
 }
 
 /// Échap : annule la sélection. Pendant une capture défilante, l'arrête là : ce qui est capturé est gardé.
